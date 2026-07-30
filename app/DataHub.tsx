@@ -50,7 +50,7 @@ type Dataset = {
 
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
-const DATA_SCHEMA_VERSION = 9;
+const DATA_SCHEMA_VERSION = 10;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
@@ -61,7 +61,7 @@ const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: st
 
 const aliases = {
   sku: ["sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
-  country: ["国家", "市场", "区域", "country", "market"],
+  country: ["BI合并公司", "国家", "市场", "区域", "country", "market"],
   name: ["商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
   brand: ["渠道品牌描述", "品牌", "品牌名称", "brand"],
   category: ["大类", "一级品类", "商品大类", "categoryl1", "category1"],
@@ -69,6 +69,7 @@ const aliases = {
   smallCategory: ["小类", "三级品类", "商品小类", "categoryl3", "category3", "品类"],
   series: ["系列", "商品系列", "产品系列", "series"],
   channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
+  storeType: ["经营类型", "门店类型", "店铺类型", "经营性质", "storetype"],
   date: ["单据/出库/收货月份", "单据出库收货月份", "单据月份", "出库月份", "收货月份", "日历月份", "库存日期", "单据日期", "出库日期", "收货日期", "过账日期", "销售日期", "库存月份", "快照日期", "日期", "月份", "年月", "date", "month"],
   sales: ["本期零售数量", "零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
   wholesale: ["本期批发数量", "批发数量", "批发销售数量", "出库数量", "发货数量", "销售数量", "销量", "数量", "qty", "quantity"],
@@ -224,6 +225,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const smallCategoryHeader = findHeader(best.headers, aliases.smallCategory);
   const seriesHeader = findHeader(best.headers, aliases.series);
   const channelHeader = findHeader(best.headers, aliases.channel);
+  const storeTypeHeader = findHeader(best.headers, aliases.storeType);
   const monthly: Record<string, number> = {};
   const sku: Record<string, number> = {};
   const countries: Record<string, number> = {};
@@ -233,6 +235,13 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   let revenue = 0;
 
   best.rows.forEach((row) => {
+    const rowCountry = countryHeader ? String(row[countryHeader] ?? "").trim() : "";
+    const rowStoreType = storeTypeHeader ? String(row[storeTypeHeader] ?? "").trim() : "";
+    const isVietnamFranchiseRetail =
+      kind === "sales" &&
+      /越南|vietnam/i.test(rowCountry) &&
+      /加盟/.test(rowStoreType);
+    if (isVietnamFranchiseRetail) return;
     const qty = quantityHeader ? numeric(row[quantityHeader]) : 0;
     const rowAmount = valueHeader ? numeric(row[valueHeader]) : 0;
     const rowRevenue = revenueHeader ? numeric(row[revenueHeader]) : rowAmount;
@@ -244,7 +253,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     add(monthly, dateHeader ? monthOf(row[dateHeader]) : "", qty);
     const month = dateHeader ? monthOf(row[dateHeader]) : "";
     const skuValue = skuHeader ? String(row[skuHeader] ?? "").trim() : "";
-    const country = countryHeader ? String(row[countryHeader] ?? "").trim() : "";
+    const country = rowCountry;
     const name = nameHeader ? String(row[nameHeader] ?? "").trim() : "";
     const brand = brandHeader ? normalizeBrand(row[brandHeader]) : "";
     const category = categoryHeader ? String(row[categoryHeader] ?? "").trim() : "";
@@ -639,6 +648,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <label className="search-filter">SKU / 商品<input value={skuSearch} onChange={(event) => setSkuSearch(event.target.value)} placeholder="输入货号或品名" /></label>
           <div className="metric-switch"><span>图表口径</span><button className={metricMode === "quantity" ? "active" : ""} onClick={() => setMetricMode("quantity")}>数量</button><button className={metricMode === "amount" ? "active" : ""} onClick={() => setMetricMode("amount")}>吊牌金额</button>{view === "sales" && <button className={metricMode === "revenue" ? "active" : ""} onClick={() => setMetricMode("revenue")}>流水</button>}</div>
         </div>
+        {view === "sales" && <div className="detail-upgrade-note"><strong>销售经营口径</strong><span>R01 零售数据已自动剔除“越南 + 加盟店”，该部分属于批发客户终端销售，避免与批发流水重复计算。</span></div>}
         {!detailReady && <div className="detail-upgrade-note"><strong>需要重新上传销售与库存文件</strong><span>旧版只保存总量汇总；新版上传后会保留SKU、国家、品类、渠道和月份维度，才能生成细颗粒度分析。</span></div>}
         <div className="summary-grid analytics-kpis">
           {view !== "inventory" && <>
