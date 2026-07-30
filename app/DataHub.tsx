@@ -5,6 +5,15 @@ import * as XLSX from "xlsx";
 
 type DataKind = "sales" | "inventory" | "oih";
 type Row = Record<string, unknown>;
+type DetailRecord = {
+  month: string;
+  sku: string;
+  name: string;
+  country: string;
+  category: string;
+  channel: string;
+  quantity: number;
+};
 
 type Dataset = {
   kind: DataKind;
@@ -25,6 +34,7 @@ type Dataset = {
   monthly: Record<string, number>;
   sku: Record<string, number>;
   countries: Record<string, number>;
+  details?: DetailRecord[];
 };
 
 const DB_NAME = "wilson-rolling-inventory";
@@ -38,6 +48,9 @@ const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: st
 const aliases = {
   sku: ["sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
   country: ["国家", "市场", "区域", "country", "market"],
+  name: ["商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
+  category: ["品类", "商品品类", "产品品类", "大类", "中类", "category"],
+  channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
   date: ["日期", "月份", "年月", "销售日期", "库存月份", "快照日期", "date", "month"],
   sales: ["零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
   inventory: ["期末库存数量", "库存数量", "可用库存", "期末库存", "库存", "数量", "qty", "quantity"],
@@ -138,9 +151,13 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const skuHeader = findHeader(best.headers, aliases.sku);
   const countryHeader = findHeader(best.headers, aliases.country);
   const dateHeader = findHeader(best.headers, aliases.date);
+  const nameHeader = findHeader(best.headers, aliases.name);
+  const categoryHeader = findHeader(best.headers, aliases.category);
+  const channelHeader = findHeader(best.headers, aliases.channel);
   const monthly: Record<string, number> = {};
   const sku: Record<string, number> = {};
   const countries: Record<string, number> = {};
+  const detailMap = new Map<string, DetailRecord>();
   let quantity = 0;
 
   best.rows.forEach((row) => {
@@ -149,6 +166,18 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     add(sku, skuHeader ? String(row[skuHeader] ?? "").trim() : "", qty);
     add(countries, countryHeader ? String(row[countryHeader] ?? "").trim() : "", qty);
     add(monthly, dateHeader ? monthOf(row[dateHeader]) : "", qty);
+    const month = dateHeader ? monthOf(row[dateHeader]) : "";
+    const skuValue = skuHeader ? String(row[skuHeader] ?? "").trim() : "";
+    const country = countryHeader ? String(row[countryHeader] ?? "").trim() : "";
+    const name = nameHeader ? String(row[nameHeader] ?? "").trim() : "";
+    const category = categoryHeader ? String(row[categoryHeader] ?? "").trim() : "";
+    const channel = channelHeader ? String(row[channelHeader] ?? "").trim() : "";
+    if (skuValue) {
+      const key = [month, country, skuValue, name, category, channel].join("¦");
+      const current = detailMap.get(key);
+      if (current) current.quantity += qty;
+      else detailMap.set(key, { month, sku: skuValue, name, country, category, channel, quantity: qty });
+    }
   });
   const months = Object.keys(monthly).sort();
   const missing = [
@@ -176,6 +205,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     monthly,
     sku,
     countries,
+    details: Array.from(detailMap.values()),
   };
 }
 
@@ -191,10 +221,15 @@ function nextMonths(start: string, count = 6) {
   });
 }
 
-export default function DataHub() {
+export default function DataHub({ view = "data" }: { view?: "data" | "analytics" }) {
   const [datasets, setDatasets] = useState<Partial<Record<DataKind, Dataset>>>({});
   const [busy, setBusy] = useState<DataKind | null>(null);
   const [notice, setNotice] = useState("正在读取本机已保存的数据…");
+  const [analysisMonth, setAnalysisMonth] = useState("");
+  const [countryFilter, setCountryFilter] = useState("全部");
+  const [categoryFilter, setCategoryFilter] = useState("全部");
+  const [skuSearch, setSkuSearch] = useState("");
+  const [riskFilter, setRiskFilter] = useState("全部");
   const inputs = useRef<Partial<Record<DataKind, HTMLInputElement | null>>>({});
 
   useEffect(() => {
@@ -218,6 +253,54 @@ export default function DataHub() {
   const inventorySku = inventory?.summary.skuCount ?? 0;
   const depth = inventorySku ? inventoryQty / inventorySku : 0;
   const woi = monthlyVelocity ? (inventoryQty / monthlyVelocity) * 4.33 : 0;
+  const detailReady = Boolean(sales?.details?.length && inventory?.details?.length);
+  const availableMonths = Array.from(new Set((sales?.details ?? []).map((row) => row.month).filter(Boolean))).sort();
+  const selectedMonth = analysisMonth || availableMonths.at(-1) || "";
+  const recentAnalysisMonths = selectedMonth ? availableMonths.filter((month) => month <= selectedMonth).slice(-3) : [];
+  const latestInventoryMonth = Array.from(new Set((inventory?.details ?? []).map((row) => row.month).filter(Boolean))).sort().at(-1) ?? "";
+  const filterCountries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.country).filter(Boolean))).sort();
+  const filterCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.category).filter(Boolean))).sort();
+
+  const skuAnalysis = useMemo(() => {
+    type SkuLine = { key: string; sku: string; name: string; country: string; category: string; channel: string; stock: number; sales: number; sales3m: number; oih: number; ratio: number; weeks: number; status: string };
+    const lines = new Map<string, SkuLine>();
+    const ensure = (row: DetailRecord) => {
+      const key = `${row.country}¦${row.sku}`;
+      if (!lines.has(key)) lines.set(key, { key, sku: row.sku, name: row.name, country: row.country, category: row.category, channel: row.channel, stock: 0, sales: 0, sales3m: 0, oih: 0, ratio: 0, weeks: 0, status: "" });
+      const line = lines.get(key)!;
+      if (!line.name && row.name) line.name = row.name;
+      if (!line.category && row.category) line.category = row.category;
+      if (!line.channel && row.channel) line.channel = row.channel;
+      return line;
+    };
+    (inventory?.details ?? []).filter((row) => !latestInventoryMonth || !row.month || row.month === latestInventoryMonth).forEach((row) => { ensure(row).stock += row.quantity; });
+    (sales?.details ?? []).filter((row) => recentAnalysisMonths.includes(row.month)).forEach((row) => {
+      const line = ensure(row);
+      line.sales3m += row.quantity / Math.max(recentAnalysisMonths.length, 1);
+      if (row.month === selectedMonth) line.sales += row.quantity;
+    });
+    (oih?.details ?? []).forEach((row) => { ensure(row).oih += row.quantity; });
+    return Array.from(lines.values()).map((line) => {
+      line.ratio = line.sales3m > 0 ? line.stock / line.sales3m : line.stock > 0 ? 999 : 0;
+      line.weeks = line.sales3m > 0 ? line.ratio * 4.33 : line.stock > 0 ? 999 : 0;
+      line.status = line.stock > 0 && line.sales3m <= 0 ? "无动销" : line.ratio > 6 ? "高库存" : line.ratio < 1 && line.sales3m > 0 ? "缺货风险" : "健康";
+      return line;
+    }).filter((line) =>
+      (countryFilter === "全部" || line.country === countryFilter) &&
+      (categoryFilter === "全部" || line.category === categoryFilter) &&
+      (riskFilter === "全部" || line.status === riskFilter) &&
+      (!skuSearch || `${line.sku} ${line.name}`.toLowerCase().includes(skuSearch.toLowerCase())),
+    ).sort((a, b) => b.stock - a.stock);
+  }, [sales?.details, inventory?.details, oih?.details, latestInventoryMonth, selectedMonth, recentAnalysisMonths.join("|"), countryFilter, categoryFilter, riskFilter, skuSearch]);
+
+  const analyticStock = skuAnalysis.reduce((sum, row) => sum + row.stock, 0);
+  const analyticSales = skuAnalysis.reduce((sum, row) => sum + row.sales, 0);
+  const analyticVelocity = skuAnalysis.reduce((sum, row) => sum + row.sales3m, 0);
+  const analyticRatio = analyticVelocity ? analyticStock / analyticVelocity : 0;
+  const stockedSku = skuAnalysis.filter((row) => row.stock > 0).length;
+  const movingSku = skuAnalysis.filter((row) => row.sales3m > 0).length;
+  const zeroMovingStock = skuAnalysis.filter((row) => row.status === "无动销").reduce((sum, row) => sum + row.stock, 0);
+  const healthyRate = stockedSku ? skuAnalysis.filter((row) => row.status === "健康").length / stockedSku : 0;
 
   const rolling = useMemo(() => {
     const months = nextMonths(sales?.summary.latestMonth || inventory?.summary.latestMonth || "", 6);
@@ -291,6 +374,57 @@ export default function DataHub() {
       : rolling.some((row) => row.closing < 0)
         ? "滚动预测期内将出现缺货；建议按缺口补单，但不要一次性提前全部到货。"
         : `当前库存约 ${woi.toFixed(1)} 周，滚动期内库存可控；订单仍需按国家与 SKU 继续审核。`;
+
+  if (view === "analytics") {
+    return (
+      <section className="data-hub analytics-view">
+        <div className="page-heading">
+          <div><p className="eyebrow blue">SALES & INVENTORY DIAGNOSTICS</p><h2>销售与库存经营看板</h2><p>按月份、国家、品类和SKU下钻，识别无动销、高库存与缺货风险。上传数据仍保存在当前浏览器。</p></div>
+          <div className="local-badge"><i /> 同一设备自动记住</div>
+        </div>
+        <div className="analytics-filterbar">
+          <label>分析月份<select value={selectedMonth} onChange={(event) => setAnalysisMonth(event.target.value)}><option value="">最新月份</option>{availableMonths.map((month) => <option key={month}>{month}</option>)}</select></label>
+          <label>国家<select value={countryFilter} onChange={(event) => setCountryFilter(event.target.value)}><option>全部</option>{filterCountries.map((country) => <option key={country}>{country}</option>)}</select></label>
+          <label>品类<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option>全部</option>{filterCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
+          <label>库存状态<select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>{["全部", "健康", "高库存", "无动销", "缺货风险"].map((status) => <option key={status}>{status}</option>)}</select></label>
+          <label className="search-filter">SKU / 商品<input value={skuSearch} onChange={(event) => setSkuSearch(event.target.value)} placeholder="输入货号或品名" /></label>
+        </div>
+        {!detailReady && <div className="detail-upgrade-note"><strong>需要重新上传销售与库存文件</strong><span>旧版只保存总量汇总；新版上传后会保留SKU、国家、品类、渠道和月份维度，才能生成细颗粒度分析。</span></div>}
+        <div className="summary-grid analytics-kpis">
+          <article><span>期末库存</span><strong>{detailReady ? fmt(analyticStock) : "—"} <em>件</em></strong><small>{latestInventoryMonth || "等待库存月份"}</small></article>
+          <article><span>当月销售</span><strong>{detailReady ? fmt(analyticSales) : "—"} <em>件</em></strong><small>{selectedMonth || "等待销售月份"}</small></article>
+          <article><span>库销比</span><strong className={analyticRatio > 6 ? "red" : analyticRatio > 4 ? "amber" : ""}>{detailReady ? analyticRatio.toFixed(1) : "—"} <em>月</em></strong><small>库存 ÷ 近3月月均销量</small></article>
+          <article><span>动销率</span><strong>{detailReady && stockedSku ? `${((movingSku / stockedSku) * 100).toFixed(1)}%` : "—"}</strong><small>有销量SKU ÷ 有库存SKU</small></article>
+          <article><span>库存宽度</span><strong>{detailReady ? fmt(stockedSku) : "—"} <em>SKU</em></strong><small>当前有库存的SKU数量</small></article>
+          <article><span>平均深度</span><strong>{detailReady && stockedSku ? fmt(analyticStock / stockedSku, 1) : "—"} <em>件/SKU</em></strong><small>库存数量 ÷ 有库存SKU</small></article>
+          <article><span>无动销库存</span><strong className="red">{detailReady ? fmt(zeroMovingStock) : "—"} <em>件</em></strong><small>近3月无销售但仍有库存</small></article>
+          <article><span>健康SKU占比</span><strong>{detailReady ? `${(healthyRate * 100).toFixed(1)}%` : "—"}</strong><small>库销比1–6个月且持续动销</small></article>
+        </div>
+        <div className="analytics-panels">
+          <section className="panel status-distribution">
+            <div className="panel-title"><div><span className="step">01</span><h3>库存状态分布</h3></div><span className="unit">SKU数</span></div>
+            <div className="status-bars">
+              {["健康", "高库存", "无动销", "缺货风险"].map((status) => {
+                const count = skuAnalysis.filter((row) => row.status === status).length;
+                return <div key={status}><span>{status}</span><i><b className={`risk-fill ${status}`} style={{ width: `${skuAnalysis.length ? Math.max(3, count / skuAnalysis.length * 100) : 0}%` }} /></i><strong>{count}</strong></div>;
+              })}
+            </div>
+          </section>
+          <section className="panel top-stock">
+            <div className="panel-title"><div><span className="step">02</span><h3>库存占用 TOP 8</h3></div><span className="unit">件</span></div>
+            <div className="top-stock-list">{skuAnalysis.slice(0, 8).map((row) => <div key={row.key}><span><b>{row.sku}</b><small>{row.country} · {row.name || "未识别品名"}</small></span><i><b style={{ width: `${analyticStock ? row.stock / Math.max(...skuAnalysis.map((item) => item.stock), 1) * 100 : 0}%` }} /></i><strong>{fmt(row.stock)}</strong></div>)}</div>
+          </section>
+        </div>
+        <section className="panel sku-diagnostic">
+          <div className="panel-title"><div><span className="step">03</span><h3>SKU经营诊断明细</h3></div><span className="unit">{fmt(skuAnalysis.length)} 行 · 点击上方筛选</span></div>
+          <div className="table-wrap"><table><thead><tr><th>SKU / 商品</th><th>国家</th><th>品类 / 渠道</th><th>期末库存</th><th>当月销售</th><th>近3月月均</th><th>库销比</th><th>库存周数</th><th>OIH</th><th>诊断</th></tr></thead>
+          <tbody>{skuAnalysis.slice(0, 500).map((row) => <tr key={row.key}><td><strong>{row.sku}</strong><small>{row.name || "未识别品名"}</small></td><td>{row.country || "未识别"}</td><td><strong>{row.category || "未识别品类"}</strong><small>{row.channel || "未识别渠道"}</small></td><td><strong>{fmt(row.stock)}</strong></td><td>{fmt(row.sales)}</td><td>{fmt(row.sales3m, 1)}</td><td>{row.ratio >= 999 ? "无销量" : `${row.ratio.toFixed(1)}月`}</td><td>{row.weeks >= 999 ? "无销量" : `${row.weeks.toFixed(1)}周`}</td><td>{fmt(row.oih)}</td><td><span className={`diagnostic-tag ${row.status}`}>{row.status}</span></td></tr>)}</tbody></table></div>
+          {skuAnalysis.length > 500 && <p className="table-limit">当前显示库存最高的500行，请使用筛选缩小范围。</p>}
+        </section>
+        <p className="privacy-note">计算口径：库存取最新可识别库存月份；当月销售取所选月份；库销比和库存周数使用截至所选月份的最近3个月月均销量。无销量但有库存归类为“无动销”。</p>
+      </section>
+    );
+  }
 
   return (
     <section className="data-hub">

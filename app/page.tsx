@@ -114,7 +114,7 @@ export default function Home() {
   const [items, setItems] = useState(seedItems);
   const [selectedSku, setSelectedSku] = useState(seedItems[2].sku);
   const [decision, setDecision] = useState("待财务决策");
-  const [activeTab, setActiveTab] = useState<"data" | "review" | "inventory" | "rules">("data");
+  const [activeTab, setActiveTab] = useState<"data" | "analytics" | "review" | "inventory" | "rules">("data");
   const [draft, setDraft] = useState({
     sku: "DEMO-003",
     country: "示例市场C",
@@ -188,6 +188,7 @@ export default function Home() {
 
       <nav className="tabs" aria-label="页面导航">
         <button className={activeTab === "data" ? "active" : ""} onClick={() => setActiveTab("data")}>数据与滚动看板</button>
+        <button className={activeTab === "analytics" ? "active" : ""} onClick={() => setActiveTab("analytics")}>销售与库存分析</button>
         <button className={activeTab === "review" ? "active" : ""} onClick={() => setActiveTab("review")}>本次下单审核</button>
         <button className={activeTab === "inventory" ? "active" : ""} onClick={() => setActiveTab("inventory")}>库存健康总览</button>
         <button className={activeTab === "rules" ? "active" : ""} onClick={() => setActiveTab("rules")}>规则与口径</button>
@@ -196,6 +197,7 @@ export default function Home() {
 
       <section className="workspace">
         {activeTab === "data" && <DataHub />}
+        {activeTab === "analytics" && <DataHub view="analytics" />}
         {activeTab === "review" && (
           <>
             <div className="page-heading">
