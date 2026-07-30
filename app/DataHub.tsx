@@ -306,7 +306,7 @@ function nextMonths(start: string, count = 6) {
   });
 }
 
-export default function DataHub({ view = "data" }: { view?: "data" | "analytics" }) {
+export default function DataHub({ view = "data" }: { view?: "data" | "analytics" | "sales" | "inventory" }) {
   const [datasets, setDatasets] = useState<Partial<Record<DataKind, Dataset>>>({});
   const [busy, setBusy] = useState<DataKind | null>(null);
   const [notice, setNotice] = useState("正在读取本机已保存的数据…");
@@ -350,7 +350,11 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const inventorySku = inventory?.summary.skuCount ?? 0;
   const depth = inventorySku ? inventoryQty / inventorySku : 0;
   const woi = monthlyVelocity ? (inventoryQty / monthlyVelocity) * 4.33 : 0;
-  const detailReady = Boolean(sales?.details?.length && inventory?.details?.length);
+  const detailReady = view === "sales"
+    ? Boolean(sales?.details?.length)
+    : view === "inventory"
+      ? Boolean(inventory?.details?.length)
+      : Boolean(sales?.details?.length && inventory?.details?.length);
   const availableMonths = Array.from(new Set((sales?.details ?? []).map((row) => row.month).filter(Boolean))).sort();
   const selectedMonth = analysisMonth || availableMonths.at(-1) || "";
   const recentAnalysisMonths = selectedMonth ? availableMonths.filter((month) => month <= selectedMonth).slice(-3) : [];
@@ -533,11 +537,18 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         ? `${overviewBrand}按当前销售额滚动预测将出现库存不足；建议结合到货月份补单。`
         : `${overviewBrand}金额库销比为 ${overviewAmountRatio.toFixed(1)} 个月，滚动期内库存可控；可继续按品类和SKU下钻审核。`;
 
-  if (view === "analytics") {
+  if (view === "analytics" || view === "sales" || view === "inventory") {
+    const viewTitle = view === "sales" ? "销售经营看板" : view === "inventory" ? "库存经营看板" : "进销存经营总览";
+    const viewEyebrow = view === "sales" ? "SALES PERFORMANCE" : view === "inventory" ? "INVENTORY MANAGEMENT" : "SALES & INVENTORY OVERVIEW";
+    const viewDescription = view === "sales"
+      ? "按月度、销售类型、品牌、国家和品类查看销售趋势、结构与动销表现。"
+      : view === "inventory"
+        ? "按品牌、国家、品类、系列和SKU查看库存规模、结构、深度与积压风险。"
+        : "将零售、批发、库存与OIH放在一起，查看月度库销关系及经营风险。";
     return (
       <section className="data-hub analytics-view">
         <div className="page-heading">
-          <div><p className="eyebrow blue">SALES & INVENTORY DIAGNOSTICS</p><h2>销售与库存经营看板</h2><p>按月份、国家、品类和SKU下钻，识别无动销、高库存与缺货风险。上传数据仍保存在当前浏览器。</p></div>
+          <div><p className="eyebrow blue">{viewEyebrow}</p><h2>{viewTitle}</h2><p>{viewDescription} 上传数据仍保存在当前浏览器。</p></div>
           <div className="local-badge"><i /> 同一设备自动记住</div>
         </div>
         <div className="analytics-filterbar">
@@ -555,8 +566,14 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         </div>
         {!detailReady && <div className="detail-upgrade-note"><strong>需要重新上传销售与库存文件</strong><span>旧版只保存总量汇总；新版上传后会保留SKU、国家、品类、渠道和月份维度，才能生成细颗粒度分析。</span></div>}
         <div className="summary-grid analytics-kpis">
+          {view !== "inventory" && <>
+          <article><span>当月销售</span><strong>{detailReady ? fmt(analyticSales) : "—"} <em>件</em></strong><small>{selectedMonth || "等待销售月份"} · {salesSourceFilter}</small></article>
+          <article><span>当月销售吊牌金额</span><strong>{detailReady ? fmt(analyticSalesAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
+          <article><span>近3月月均销售额</span><strong>{detailReady ? fmt(analyticVelocityAmount / 10000, 1) : "—"} <em>万元</em></strong><small>零售与批发可分别筛选</small></article>
+          <article><span>动销SKU</span><strong>{detailReady ? fmt(movingSku) : "—"} <em>SKU</em></strong><small>近3个月产生销售的SKU</small></article>
+          </>}
+          {view !== "sales" && <>
           <article><span>期末库存</span><strong>{detailReady ? fmt(analyticStock) : "—"} <em>件</em></strong><small>{latestInventoryMonth || "等待库存月份"}</small></article>
-          <article><span>当月销售</span><strong>{detailReady ? fmt(analyticSales) : "—"} <em>件</em></strong><small>{selectedMonth || "等待销售月份"}</small></article>
           <article><span>库销比</span><strong className={analyticRatio > 6 ? "red" : analyticRatio > 4 ? "amber" : ""}>{detailReady ? analyticRatio.toFixed(1) : "—"} <em>月</em></strong><small>库存 ÷ 近3月月均销量</small></article>
           <article><span>动销率</span><strong>{detailReady && stockedSku ? `${((movingSku / stockedSku) * 100).toFixed(1)}%` : "—"}</strong><small>有销量SKU ÷ 有库存SKU</small></article>
           <article><span>库存宽度</span><strong>{detailReady ? fmt(stockedSku) : "—"} <em>SKU</em></strong><small>当前有库存的SKU数量</small></article>
@@ -564,9 +581,8 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <article><span>无动销库存</span><strong className="red">{detailReady ? fmt(zeroMovingStock) : "—"} <em>件</em></strong><small>近3月无销售但仍有库存</small></article>
           <article><span>健康SKU占比</span><strong>{detailReady ? `${(healthyRate * 100).toFixed(1)}%` : "—"}</strong><small>库销比1–6个月且持续动销</small></article>
           <article><span>库存吊牌金额</span><strong>{detailReady ? fmt(analyticStockAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
-          <article><span>当月销售吊牌金额</span><strong>{detailReady ? fmt(analyticSalesAmount / 10000, 1) : "—"} <em>万元</em></strong><small>{selectedMonth || "等待销售月份"} · RMB吊牌</small></article>
           <article><span>金额库销比</span><strong className={analyticAmountRatio > 6 ? "red" : analyticAmountRatio > 4 ? "amber" : ""}>{detailReady ? analyticAmountRatio.toFixed(1) : "—"} <em>月</em></strong><small>库存吊牌额 ÷ 近3月月均销售吊牌额</small></article>
-          <article><span>近3月月均销售额</span><strong>{detailReady ? fmt(analyticVelocityAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
+          </>}
         </div>
         <div className="analytics-panels">
           <section className="panel status-distribution">
