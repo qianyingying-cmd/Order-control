@@ -48,7 +48,8 @@ type Dataset = {
 
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
-const DATA_SCHEMA_VERSION = 7;
+const DATA_SCHEMA_VERSION = 8;
+const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
   { kind: "wholesale", title: "批发销售", subtitle: "观远批发 / 客户销售", accent: "blue" },
@@ -79,6 +80,18 @@ const aliases = {
 
 function isSalesKind(kind: DataKind) {
   return kind === "sales" || kind === "wholesale";
+}
+
+function normalizeBrand(value: unknown) {
+  const raw = String(value ?? "").trim();
+  const normalized = raw.toUpperCase().replace(/[\s_\-·•]/g, "");
+  if (/ARCTERYX|ARC'TERYX|始祖鸟/.test(normalized)) return "ARC'TERYX";
+  if (/DESCENTE|迪桑特/.test(normalized)) return "DESCENTE";
+  if (/SALOMON|萨洛蒙/.test(normalized)) return "SALOMON";
+  if (/WILSON|威尔胜/.test(normalized)) return "WILSON";
+  if (/FILA|斐乐/.test(normalized)) return "FILA";
+  if (/ANTA|安踏/.test(normalized)) return "ANTA";
+  return "";
 }
 
 function clean(value: unknown) {
@@ -224,7 +237,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const skuValue = skuHeader ? String(row[skuHeader] ?? "").trim() : "";
     const country = countryHeader ? String(row[countryHeader] ?? "").trim() : "";
     const name = nameHeader ? String(row[nameHeader] ?? "").trim() : "";
-    const brand = brandHeader ? String(row[brandHeader] ?? "").trim() : "";
+    const brand = brandHeader ? normalizeBrand(row[brandHeader]) : "";
     const category = categoryHeader ? String(row[categoryHeader] ?? "").trim() : "";
     const middleCategory = middleCategoryHeader ? String(row[middleCategoryHeader] ?? "").trim() : "";
     const smallCategory = smallCategoryHeader ? String(row[smallCategoryHeader] ?? "").trim() : "";
@@ -375,12 +388,12 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const latestInventoryMonth = Array.from(new Set((inventory?.details ?? []).map((row) => row.month).filter(Boolean))).sort().at(-1) ?? "";
   const filterCountries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.country).filter(Boolean))).sort();
   const filterCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.category).filter(Boolean))).sort();
-  const invalidBrandValues = new Set(["线上", "线下", "全部", "未识别"]);
-  const filterBrands = Array.from(new Set(
+  const presentBrands = new Set(
     [...(sales?.details ?? []), ...(inventory?.details ?? [])]
       .map((row) => row.brand.trim())
-      .filter((brand) => brand && !invalidBrandValues.has(brand)),
-  )).sort();
+      .filter(Boolean),
+  );
+  const filterBrands = CANONICAL_BRANDS.filter((brand) => presentBrands.has(brand));
   const overviewMatches = (row: DetailRecord) => overviewBrand === "全部品牌" || row.brand === overviewBrand;
   const overviewInventoryRows = (inventory?.details ?? []).filter((row) => overviewMatches(row) && (!latestInventoryMonth || !row.month || row.month === latestInventoryMonth));
   const overviewSalesRows = (sales?.details ?? []).filter(overviewMatches);
