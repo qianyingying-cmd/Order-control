@@ -421,6 +421,11 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const previousMonth = availableMonths.filter((month) => month < selectedMonth).at(-1) ?? "";
   const previousRevenue = salesDashboardRows.filter((row) => row.month === previousMonth).reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
   const revenueGrowth = previousRevenue ? salesRevenue / previousRevenue - 1 : 0;
+  const priorYearMonth = selectedMonth
+    ? `${Number(selectedMonth.slice(0, 4)) - 1}-${selectedMonth.slice(5, 7)}`
+    : "";
+  const priorYearRevenue = salesDashboardRows.filter((row) => row.month === priorYearMonth).reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
+  const revenueYoY = priorYearRevenue ? salesRevenue / priorYearRevenue - 1 : 0;
   const salesMonthlyRevenue = availableMonths.slice(-12).map((month) => ({
     name: month,
     value: salesDashboardRows.filter((row) => row.month === month).reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0) / 10000,
@@ -639,6 +644,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           {view !== "inventory" && <>
           <article><span>当月销售流水</span><strong>{detailReady ? fmt(salesRevenue / 10000, 1) : "—"} <em>万元</em></strong><small>{selectedMonth || "等待销售月份"} · RMB实际销售额</small></article>
           <article><span>流水环比</span><strong className={revenueGrowth < 0 ? "red" : ""}>{detailReady && previousRevenue ? `${revenueGrowth >= 0 ? "+" : ""}${(revenueGrowth * 100).toFixed(1)}%` : "—"}</strong><small>对比 {previousMonth || "上月"}</small></article>
+          <article><span>流水同比</span><strong className={revenueYoY < 0 ? "red" : ""}>{detailReady && priorYearRevenue ? `${revenueYoY >= 0 ? "+" : ""}${(revenueYoY * 100).toFixed(1)}%` : "—"}</strong><small>{priorYearRevenue ? `对比 ${priorYearMonth}` : "无去年同期数据"}</small></article>
           <article><span>当月销售吊牌金额</span><strong>{detailReady ? fmt(salesTicketAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
           <article><span>当月销量</span><strong>{detailReady ? fmt(salesQuantity) : "—"} <em>件</em></strong><small>{salesSourceFilter}</small></article>
           </>}
