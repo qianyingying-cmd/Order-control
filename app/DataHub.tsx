@@ -55,18 +55,18 @@ const aliases = {
   sku: ["sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
   country: ["国家", "市场", "区域", "country", "market"],
   name: ["商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
-  brand: ["品牌", "品牌名称", "brand"],
+  brand: ["渠道品牌描述", "品牌", "品牌名称", "brand"],
   category: ["大类", "一级品类", "商品大类", "categoryl1", "category1"],
   middleCategory: ["中类", "二级品类", "商品中类", "categoryl2", "category2"],
   smallCategory: ["小类", "三级品类", "商品小类", "categoryl3", "category3", "品类"],
   series: ["系列", "商品系列", "产品系列", "series"],
   channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
-  date: ["日期", "月份", "年月", "销售日期", "库存月份", "快照日期", "date", "month"],
-  sales: ["零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
-  inventory: ["期末库存数量", "库存数量", "可用库存", "期末库存", "库存", "数量", "qty", "quantity"],
+  date: ["日历月份", "库存日期", "日期", "月份", "年月", "销售日期", "库存月份", "快照日期", "date", "month"],
+  sales: ["本期零售数量", "零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
+  inventory: ["本期_期末库存数量", "本期期末库存数量", "期末库存数量", "库存数量", "可用库存", "数量", "qty", "quantity"],
   oih: ["oih", "在途数量", "订单数量", "下单数量", "未到货数量", "open order", "数量", "qty", "quantity"],
-  salesValue: ["吊牌销售金额", "销售吊牌金额", "零售吊牌金额", "吊牌金额", "零售金额", "销售金额", "retailvalue"],
-  inventoryValue: ["库存吊牌金额", "期末库存吊牌金额", "吊牌金额", "库存金额", "stockvalue"],
+  salesValue: ["本期吊牌金额-人民币", "本期吊牌金额人民币", "吊牌销售金额", "销售吊牌金额", "零售吊牌金额", "吊牌金额", "retailvalue"],
+  inventoryValue: ["本期_期末库存人民币吊牌金额", "本期期末库存人民币吊牌金额", "库存人民币吊牌金额", "期末库存人民币吊牌金额", "库存吊牌金额", "期末库存吊牌金额", "stockvalue"],
   oihValue: ["oih吊牌金额", "订单吊牌金额", "在途吊牌金额", "吊牌金额", "订单金额"],
 };
 
@@ -76,12 +76,22 @@ function clean(value: unknown) {
 
 function findHeader(headers: string[], options: string[]) {
   const normalized = options.map(clean);
-  return headers.find((header) => normalized.some((option) => clean(header) === option || clean(header).includes(option)));
+  const exact = headers.find((header) => normalized.some((option) => clean(header) === option));
+  if (exact) return exact;
+  const ordered = [...normalized].sort((a, b) => b.length - a.length);
+  return headers.find((header) => ordered.some((option) => option.length >= 2 && clean(header).includes(option)));
+}
+
+function findQuantityHeader(headers: string[], options: string[]) {
+  return findHeader(headers.filter((header) => !/日期|月份|金额|吊牌|价格|单价/.test(header)), options);
 }
 
 function numeric(value: unknown) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  const parsed = Number(String(value ?? "").replace(/,/g, "").replace(/[^\d.-]/g, ""));
+  const raw = String(value ?? "").replace(/,/g, "").trim();
+  const direct = Number(raw);
+  if (Number.isFinite(direct)) return direct;
+  const parsed = Number(raw.replace(/[^\d.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -160,7 +170,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
 
   if (!best) throw new Error("工作簿中没有可读取的数据");
   const quantityOptions = kind === "sales" ? aliases.sales : kind === "inventory" ? aliases.inventory : aliases.oih;
-  const quantityHeader = findHeader(best.headers, quantityOptions);
+  const quantityHeader = findQuantityHeader(best.headers, quantityOptions);
   const valueOptions = kind === "sales" ? aliases.salesValue : kind === "inventory" ? aliases.inventoryValue : aliases.oihValue;
   const valueHeader = findHeader(best.headers, valueOptions);
   const skuHeader = findHeader(best.headers, aliases.sku);
@@ -198,17 +208,18 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const smallCategory = smallCategoryHeader ? String(row[smallCategoryHeader] ?? "").trim() : "";
     const series = seriesHeader ? String(row[seriesHeader] ?? "").trim() : "";
     const channel = channelHeader ? String(row[channelHeader] ?? "").trim() : "";
-    if (skuValue) {
-      const key = [month, country, skuValue, name, brand, category, middleCategory, smallCategory, series, channel].join("¦");
+    const analysisSku = skuValue || (kind === "sales" ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
+    if (analysisSku) {
+      const key = [month, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel].join("¦");
       const current = detailMap.get(key);
       if (current) { current.quantity += qty; current.amount += rowAmount; }
-      else detailMap.set(key, { month, sku: skuValue, name, brand, country, category, middleCategory, smallCategory, series, channel, quantity: qty, amount: rowAmount });
+      else detailMap.set(key, { month, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, quantity: qty, amount: rowAmount });
     }
   });
   const months = Object.keys(monthly).sort();
   const missing = [
     !quantityHeader && "数量",
-    !skuHeader && "SKU",
+    !skuHeader && kind !== "sales" && "SKU",
     !dateHeader && "日期/月度",
   ].filter(Boolean);
 
@@ -220,7 +231,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     sheetName: best.sheetName,
     headers: best.headers,
     status: missing.length ? "mapping" : "ready",
-    message: missing.length ? `已保存，但未识别：${missing.join("、")}` : "字段已自动识别，可用于滚动分析",
+    message: missing.length ? `已保存，但未识别：${missing.join("、")}` : !skuHeader && kind === "sales" ? "销售底稿无SKU，将按品牌、品类、国家和月份分析" : "字段已自动识别，可用于滚动分析",
     summary: {
       quantity,
       amount,
@@ -262,6 +273,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const [skuSearch, setSkuSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("全部");
   const [metricMode, setMetricMode] = useState<"quantity" | "amount">("quantity");
+  const [overviewBrand, setOverviewBrand] = useState("全部品牌");
   const inputs = useRef<Partial<Record<DataKind, HTMLInputElement | null>>>({});
 
   useEffect(() => {
@@ -293,6 +305,24 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const filterCountries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.country).filter(Boolean))).sort();
   const filterCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.category).filter(Boolean))).sort();
   const filterBrands = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.brand).filter(Boolean))).sort();
+  const overviewMatches = (row: DetailRecord) => overviewBrand === "全部品牌" || row.brand === overviewBrand;
+  const overviewInventoryRows = (inventory?.details ?? []).filter((row) => overviewMatches(row) && (!latestInventoryMonth || !row.month || row.month === latestInventoryMonth));
+  const overviewSalesRows = (sales?.details ?? []).filter(overviewMatches);
+  const overviewOihRows = (oih?.details ?? []).filter(overviewMatches);
+  const overviewSalesMonths = Array.from(new Set(overviewSalesRows.map((row) => row.month).filter(Boolean))).sort();
+  const overviewLatestSalesMonth = overviewSalesMonths.at(-1) ?? "";
+  const overviewRecentMonths = overviewSalesMonths.slice(-3);
+  const overviewInventoryAmount = overviewInventoryRows.reduce((sum, row) => sum + (row.amount ?? 0), 0);
+  const overviewLatestSalesAmount = overviewSalesRows.filter((row) => row.month === overviewLatestSalesMonth).reduce((sum, row) => sum + (row.amount ?? 0), 0);
+  const overviewVelocityAmount = overviewRecentMonths.length
+    ? overviewSalesRows.filter((row) => overviewRecentMonths.includes(row.month)).reduce((sum, row) => sum + (row.amount ?? 0), 0) / overviewRecentMonths.length
+    : 0;
+  const overviewOihAmount = overviewOihRows.reduce((sum, row) => sum + (row.amount ?? 0), 0);
+  const overviewAmountRatio = overviewVelocityAmount ? overviewInventoryAmount / overviewVelocityAmount : 0;
+  const overviewSalesTrend = overviewSalesMonths.slice(-12).map((month) => ({
+    month,
+    value: overviewSalesRows.filter((row) => row.month === month).reduce((sum, row) => sum + (row.amount ?? 0), 0) / 10000,
+  }));
   const filterMiddleCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].filter((row) => categoryFilter === "全部" || row.category === categoryFilter).map((row) => row.middleCategory).filter(Boolean))).sort();
   const filterSmallCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].filter((row) => (categoryFilter === "全部" || row.category === categoryFilter) && (middleCategoryFilter === "全部" || row.middleCategory === middleCategoryFilter)).map((row) => row.smallCategory).filter(Boolean))).sort();
   const filterSeries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.series).filter(Boolean))).sort();
@@ -371,16 +401,16 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
 
   const rolling = useMemo(() => {
     const months = nextMonths(sales?.summary.latestMonth || inventory?.summary.latestMonth || "", 6);
-    let opening = inventoryQty;
-    const forecast = monthlyVelocity;
+    let opening = overviewInventoryAmount / 10000;
+    const forecast = overviewVelocityAmount / 10000;
     return months.map((month, index) => {
-      const arrivals = index === 1 ? oihQty : 0;
+      const arrivals = index === 1 ? overviewOihAmount / 10000 : 0;
       const closing = opening + arrivals - forecast;
       const row = { month, opening, arrivals, sales: forecast, closing };
       opening = closing;
       return row;
     });
-  }, [inventoryQty, monthlyVelocity, oihQty, sales?.summary.latestMonth, inventory?.summary.latestMonth]);
+  }, [overviewInventoryAmount, overviewVelocityAmount, overviewOihAmount, sales?.summary.latestMonth, inventory?.summary.latestMonth]);
 
   async function upload(kind: DataKind, event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -434,13 +464,13 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
     event.target.value = "";
   }
 
-  const conclusion = !inventory || !sales
-    ? "先补齐销售与月末库存，才能形成可靠的库存周数和滚动结论。"
-    : woi > 26
-      ? `当前库存约 ${woi.toFixed(1)} 周，偏高；建议先消化库存，并将新订单拆分到货。`
+  const conclusion = !detailReady
+    ? "请按新口径重新上传销售与月末库存，系统将按品牌和RMB吊牌金额重算月度库销比。"
+    : overviewAmountRatio > 6
+      ? `${overviewBrand}库存吊牌金额约为近3月月均销售额的 ${overviewAmountRatio.toFixed(1)} 倍，偏高；建议先消化库存，并将新订单拆分到货。`
       : rolling.some((row) => row.closing < 0)
-        ? "滚动预测期内将出现缺货；建议按缺口补单，但不要一次性提前全部到货。"
-        : `当前库存约 ${woi.toFixed(1)} 周，滚动期内库存可控；订单仍需按国家与 SKU 继续审核。`;
+        ? `${overviewBrand}按当前销售额滚动预测将出现库存不足；建议结合到货月份补单。`
+        : `${overviewBrand}金额库销比为 ${overviewAmountRatio.toFixed(1)} 个月，滚动期内库存可控；可继续按品类和SKU下钻审核。`;
 
   if (view === "analytics") {
     return (
@@ -530,6 +560,12 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       <div className="data-toolbar">
         <span>{notice}</span>
         <div>
+          <label className="overview-brand">品牌
+            <select value={overviewBrand} onChange={(event) => setOverviewBrand(event.target.value)}>
+              <option>全部品牌</option>
+              {filterBrands.map((brand) => <option key={brand}>{brand}</option>)}
+            </select>
+          </label>
           <button className="secondary-button" onClick={exportBackup} disabled={!Object.keys(datasets).length}>导出数据备份</button>
           <label className="secondary-button file-button">恢复数据备份<input type="file" accept=".json" onChange={importBackup} /></label>
         </div>
@@ -548,7 +584,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
                 <>
                   <strong className="file-name">{data.fileName}</strong>
                   <p>{fmt(data.rowCount)} 行 · {data.sheetName} · {new Date(data.uploadedAt).toLocaleString("zh-CN")}</p>
-                  <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>SKU <b>{fmt(data.summary.skuCount)}</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
+                  <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>吊牌额 <b>{fmt((data.summary.amount ?? 0) / 10000, 1)}万</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
                   <small className={data.status === "ready" ? "parse-ok" : "parse-warning"}>{data.message}</small>
                 </>
               ) : <p className="empty-copy">支持 .xlsx、.xls、.csv；会自动寻找前25行中的表头并识别数量、SKU、国家和月份。</p>}
@@ -563,24 +599,24 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       </div>
 
       <div className="summary-grid data-kpis">
-        <article><span>库存宽度</span><strong>{activeSku ? fmt(activeSku) : "—"} <em>SKU</em></strong><small>销售、库存及 OIH 去重后 SKU 数</small></article>
-        <article><span>平均库存深度</span><strong>{inventory ? fmt(depth, 1) : "—"} <em>件/SKU</em></strong><small>期末库存 ÷ 有库存 SKU</small></article>
-        <article><span>最近月均销量</span><strong>{sales ? fmt(monthlyVelocity, 1) : "—"} <em>件/月</em></strong><small>最近3个可识别月份平均</small></article>
-        <article><span>库存周数 WOI</span><strong className={woi > 26 ? "red" : woi > 20 ? "amber" : ""}>{sales && inventory ? `${woi.toFixed(1)}周` : "—"}</strong><small>期末库存 ÷ 月均销量 × 4.33</small></article>
+        <article><span>库存吊牌金额</span><strong>{detailReady ? fmt(overviewInventoryAmount / 10000, 1) : "—"} <em>万元</em></strong><small>{overviewBrand} · RMB吊牌 · {latestInventoryMonth || "待上传"}</small></article>
+        <article><span>当月销售吊牌金额</span><strong>{detailReady ? fmt(overviewLatestSalesAmount / 10000, 1) : "—"} <em>万元</em></strong><small>{overviewBrand} · {overviewLatestSalesMonth || "待上传"}</small></article>
+        <article><span>近3月月均销售额</span><strong>{detailReady ? fmt(overviewVelocityAmount / 10000, 1) : "—"} <em>万元/月</em></strong><small>RMB吊牌口径</small></article>
+        <article><span>金额库销比</span><strong className={overviewAmountRatio > 6 ? "red" : overviewAmountRatio > 4 ? "amber" : ""}>{detailReady ? overviewAmountRatio.toFixed(1) : "—"} <em>月</em></strong><small>库存吊牌额 ÷ 近3月月均销售吊牌额</small></article>
       </div>
 
       <section className="data-conclusion">
         <div><span>当前系统结论</span><h3>{conclusion}</h3></div>
-        <strong>{sales && inventory ? (woi > 26 ? "建议控单" : "进入SKU审核") : "数据待补齐"}</strong>
+        <strong>{detailReady ? (overviewAmountRatio > 6 ? "建议控单" : "进入明细审核") : "需重新上传"}</strong>
       </section>
 
       <div className="data-analysis-grid">
         <section className="panel">
-          <div className="panel-title"><div><span className="step">01</span><h3>近月销售趋势</h3></div><span className="unit">实际数量</span></div>
-          {salesMonths.length ? (
+          <div className="panel-title"><div><span className="step">01</span><h3>近月销售趋势</h3></div><span className="unit">RMB吊牌 · 万元</span></div>
+          {overviewSalesTrend.length ? (
             <div className="mini-trend">
-              {salesMonths.slice(-12).map(([month, value]) => {
-                const max = Math.max(...salesMonths.slice(-12).map(([, number]) => number), 1);
+              {overviewSalesTrend.map(({ month, value }) => {
+                const max = Math.max(...overviewSalesTrend.map((item) => item.value), 1);
                 return <div key={month}><span>{month.slice(2)}</span><i style={{ height: `${Math.max(5, (value / max) * 100)}%` }} /><b>{fmt(value)}</b></div>;
               })}
             </div>
@@ -588,14 +624,14 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         </section>
 
         <section className="panel">
-          <div className="panel-title"><div><span className="step">02</span><h3>未来6个月进销存滚动</h3></div><span className="formula">期初 + 到货 − 销售 = 期末</span></div>
+          <div className="panel-title"><div><span className="step">02</span><h3>未来6个月进销存滚动</h3></div><span className="formula">RMB吊牌万元 · 期初 + 到货 − 销售 = 期末</span></div>
           <div className="rolling-table data-roll">
             <div className="rolling-head"><span>月份</span><span>期初</span><span>预计到货</span><span>销售预测</span><span>期末</span><span>状态</span></div>
             {rolling.map((row) => (
               <div className="rolling-row" key={row.month}>
                 <strong>{row.month}</strong><span>{fmt(row.opening)}</span><span className="arrival">+{fmt(row.arrivals)}</span><span className="sales">−{fmt(row.sales)}</span>
-                <span className={row.closing < 0 ? "negative" : row.closing < monthlyVelocity ? "low" : ""}>{fmt(row.closing)}</span>
-                <span>{row.closing < 0 ? "缺货" : row.closing < monthlyVelocity ? "偏低" : "可用"}</span>
+                <span className={row.closing < 0 ? "negative" : row.closing < overviewVelocityAmount / 10000 ? "low" : ""}>{fmt(row.closing, 1)}</span>
+                <span>{row.closing < 0 ? "不足" : row.closing < overviewVelocityAmount / 10000 ? "偏低" : "可用"}</span>
               </div>
             ))}
           </div>

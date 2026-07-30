@@ -216,6 +216,8 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .data-toolbar { min-height:48px; margin-bottom:14px; padding:8px 12px; border:1px solid #d9e3eb; border-radius:9px; background:#f8fbfd; display:flex; align-items:center; justify-content:space-between; gap:16px; }
 .data-toolbar > span { color:#526b7d; font-size:11px; }
 .data-toolbar > div { display:flex; gap:8px; }
+.overview-brand { display:flex; align-items:center; gap:7px; color:#31536c; font-size:10px; font-weight:700; }
+.overview-brand select { min-width:132px; border:1px solid #cbd6df; border-radius:6px; background:#fff; color:#153b57; padding:7px 28px 7px 9px; font:inherit; }
 .secondary-button { display:inline-flex; align-items:center; justify-content:center; border:1px solid #cbd6df; border-radius:6px; background:#fff; color:#31536c; padding:7px 10px; font-size:10px; font-weight:700; cursor:pointer; }
 .secondary-button:disabled { opacity:.45; cursor:not-allowed; }
 .file-button input { display:none; }
