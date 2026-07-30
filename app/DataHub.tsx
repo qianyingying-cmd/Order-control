@@ -48,7 +48,7 @@ type Dataset = {
 
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
-const DATA_SCHEMA_VERSION = 5;
+const DATA_SCHEMA_VERSION = 6;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
   { kind: "wholesale", title: "批发销售", subtitle: "观远批发 / 客户销售", accent: "blue" },
@@ -107,6 +107,9 @@ function numeric(value: unknown) {
 }
 
 function monthOf(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+  }
   if (typeof value === "number" && Number.isInteger(value) && value >= 200001 && value <= 209912) {
     const text = String(value);
     return `${text.slice(0, 4)}-${text.slice(4, 6)}`;
@@ -116,7 +119,7 @@ function monthOf(value: unknown) {
     return parsed ? `${parsed.y}-${String(parsed.m).padStart(2, "0")}` : "";
   }
   const text = String(value ?? "").trim();
-  const match = text.match(/(20\d{2})\D?([01]?\d)/);
+  const match = text.match(/(20\d{2})\D?(0?[1-9]|1[0-2])(?:\D|$)/);
   if (match) return `${match[1]}-${String(Number(match[2])).padStart(2, "0")}`;
   const date = new Date(text);
   return Number.isNaN(date.getTime()) ? "" : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
