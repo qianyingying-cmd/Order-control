@@ -38,6 +38,7 @@ type Dataset = {
     monthCount: number;
     countryCount: number;
     latestMonth: string;
+    detectedDateField?: string;
   };
   monthly: Record<string, number>;
   sku: Record<string, number>;
@@ -47,7 +48,7 @@ type Dataset = {
 
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
-const DATA_SCHEMA_VERSION = 4;
+const DATA_SCHEMA_VERSION = 5;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
   { kind: "wholesale", title: "批发销售", subtitle: "观远批发 / 客户销售", accent: "blue" },
@@ -65,7 +66,7 @@ const aliases = {
   smallCategory: ["小类", "三级品类", "商品小类", "categoryl3", "category3", "品类"],
   series: ["系列", "商品系列", "产品系列", "series"],
   channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
-  date: ["日历月份", "库存日期", "日期", "月份", "年月", "销售日期", "库存月份", "快照日期", "date", "month"],
+  date: ["单据/出库/收货月份", "单据出库收货月份", "单据月份", "出库月份", "收货月份", "日历月份", "库存日期", "单据日期", "出库日期", "收货日期", "过账日期", "销售日期", "库存月份", "快照日期", "日期", "月份", "年月", "date", "month"],
   sales: ["本期零售数量", "零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
   wholesale: ["本期批发数量", "批发数量", "批发销售数量", "出库数量", "发货数量", "销售数量", "销量", "数量", "qty", "quantity"],
   inventory: ["本期_期末库存数量", "本期期末库存数量", "期末库存数量", "库存数量", "可用库存", "数量", "qty", "quantity"],
@@ -106,6 +107,10 @@ function numeric(value: unknown) {
 }
 
 function monthOf(value: unknown) {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 200001 && value <= 209912) {
+    const text = String(value);
+    return `${text.slice(0, 4)}-${text.slice(4, 6)}`;
+  }
   if (typeof value === "number" && value > 30000) {
     const parsed = XLSX.SSF.parse_date_code(value);
     return parsed ? `${parsed.y}-${String(parsed.m).padStart(2, "0")}` : "";
@@ -250,6 +255,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
       monthCount: months.length,
       countryCount: Object.keys(countries).length,
       latestMonth: months.at(-1) ?? "",
+      detectedDateField: dateHeader ?? "",
     },
     monthly,
     sku,
@@ -290,6 +296,7 @@ function mergeSalesSources(retail?: Dataset, wholesale?: Dataset): Dataset | und
       monthCount: Object.keys(monthly).length,
       countryCount: Object.keys(countries).length,
       latestMonth: Object.keys(monthly).sort().at(-1) ?? "",
+      detectedDateField: sources.map((source) => source.summary.detectedDateField).filter(Boolean).join(" / "),
     },
     monthly,
     sku,
@@ -663,6 +670,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
                   <strong className="file-name">{data.fileName}</strong>
                   <p>{fmt(data.rowCount)} 行 · {data.sheetName} · {new Date(data.uploadedAt).toLocaleString("zh-CN")}</p>
                   <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>吊牌额 <b>{fmt((data.summary.amount ?? 0) / 10000, 1)}万</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
+                  <small className="detected-field">月份字段：{data.summary.detectedDateField || "未识别"}</small>
                   <small className={data.status === "ready" ? "parse-ok" : "parse-warning"}>{data.message}</small>
                 </>
               ) : <p className="empty-copy">支持 .xlsx、.xls、.csv；会自动寻找前25行中的表头并识别数量、SKU、国家和月份。</p>}
