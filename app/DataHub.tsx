@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
-type DataKind = "sales" | "inventory" | "oih";
+type DataKind = "sales" | "wholesale" | "inventory" | "oih";
 type Row = Record<string, unknown>;
 type DetailRecord = {
   month: string;
@@ -16,6 +16,7 @@ type DetailRecord = {
   smallCategory: string;
   series: string;
   channel: string;
+  sourceType?: "零售" | "批发";
   quantity: number;
   amount: number;
 };
@@ -46,9 +47,10 @@ type Dataset = {
 
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
-const DATA_SCHEMA_VERSION = 3;
+const DATA_SCHEMA_VERSION = 4;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
-  { kind: "sales", title: "销售数据", subtitle: "观远 R01 / 零售销售", accent: "blue" },
+  { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
+  { kind: "wholesale", title: "批发销售", subtitle: "观远批发 / 客户销售", accent: "blue" },
   { kind: "inventory", title: "月末库存", subtitle: "BI 库存余额 / M01", accent: "green" },
   { kind: "oih", title: "OIH / 订单", subtitle: "在途、已下单及 VBR8", accent: "amber" },
 ];
@@ -65,12 +67,18 @@ const aliases = {
   channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
   date: ["日历月份", "库存日期", "日期", "月份", "年月", "销售日期", "库存月份", "快照日期", "date", "month"],
   sales: ["本期零售数量", "零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
+  wholesale: ["本期批发数量", "批发数量", "批发销售数量", "出库数量", "发货数量", "销售数量", "销量", "数量", "qty", "quantity"],
   inventory: ["本期_期末库存数量", "本期期末库存数量", "期末库存数量", "库存数量", "可用库存", "数量", "qty", "quantity"],
   oih: ["oih", "在途数量", "订单数量", "下单数量", "未到货数量", "open order", "数量", "qty", "quantity"],
   salesValue: ["本期吊牌金额-人民币", "本期吊牌金额人民币", "吊牌销售金额", "销售吊牌金额", "零售吊牌金额", "吊牌金额", "retailvalue"],
+  wholesaleValue: ["本期批发吊牌金额-人民币", "批发吊牌金额", "批发销售吊牌金额", "出库吊牌金额", "发货吊牌金额", "本期吊牌金额-人民币", "吊牌金额", "销售金额"],
   inventoryValue: ["本期_期末库存人民币吊牌金额", "本期期末库存人民币吊牌金额", "库存人民币吊牌金额", "期末库存人民币吊牌金额", "库存吊牌金额", "期末库存吊牌金额", "stockvalue"],
   oihValue: ["oih吊牌金额", "订单吊牌金额", "在途吊牌金额", "吊牌金额", "订单金额"],
 };
+
+function isSalesKind(kind: DataKind) {
+  return kind === "sales" || kind === "wholesale";
+}
 
 function clean(value: unknown) {
   return String(value ?? "").trim().toLowerCase().replace(/[\s_\-\/（）()]/g, "");
@@ -159,7 +167,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: "" });
     for (let index = 0; index < Math.min(25, matrix.length); index += 1) {
       const headers = (matrix[index] ?? []).map((value) => String(value).trim());
-      const quantityOptions = kind === "sales" ? aliases.sales : kind === "inventory" ? aliases.inventory : aliases.oih;
+      const quantityOptions = kind === "sales" ? aliases.sales : kind === "wholesale" ? aliases.wholesale : kind === "inventory" ? aliases.inventory : aliases.oih;
       const score = [aliases.sku, aliases.country, aliases.date, quantityOptions].filter((options) => findHeader(headers, options)).length;
       if (!best || score > best.score) {
         const rows = matrix.slice(index + 1).map((values) =>
@@ -171,9 +179,9 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   });
 
   if (!best) throw new Error("工作簿中没有可读取的数据");
-  const quantityOptions = kind === "sales" ? aliases.sales : kind === "inventory" ? aliases.inventory : aliases.oih;
+  const quantityOptions = kind === "sales" ? aliases.sales : kind === "wholesale" ? aliases.wholesale : kind === "inventory" ? aliases.inventory : aliases.oih;
   const quantityHeader = findQuantityHeader(best.headers, quantityOptions);
-  const valueOptions = kind === "sales" ? aliases.salesValue : kind === "inventory" ? aliases.inventoryValue : aliases.oihValue;
+  const valueOptions = kind === "sales" ? aliases.salesValue : kind === "wholesale" ? aliases.wholesaleValue : kind === "inventory" ? aliases.inventoryValue : aliases.oihValue;
   const valueHeader = findHeader(best.headers, valueOptions);
   const skuHeader = findHeader(best.headers, aliases.sku);
   const countryHeader = findHeader(best.headers, aliases.country);
@@ -210,18 +218,18 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const smallCategory = smallCategoryHeader ? String(row[smallCategoryHeader] ?? "").trim() : "";
     const series = seriesHeader ? String(row[seriesHeader] ?? "").trim() : "";
     const channel = channelHeader ? String(row[channelHeader] ?? "").trim() : "";
-    const analysisSku = skuValue || (kind === "sales" ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
+    const analysisSku = skuValue || (isSalesKind(kind) ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
     if (analysisSku) {
       const key = [month, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel].join("¦");
       const current = detailMap.get(key);
       if (current) { current.quantity += qty; current.amount += rowAmount; }
-      else detailMap.set(key, { month, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, quantity: qty, amount: rowAmount });
+      else detailMap.set(key, { month, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, sourceType: kind === "wholesale" ? "批发" : kind === "sales" ? "零售" : undefined, quantity: qty, amount: rowAmount });
     }
   });
   const months = Object.keys(monthly).sort();
   const missing = [
     !quantityHeader && "数量",
-    !skuHeader && kind !== "sales" && "SKU",
+    !skuHeader && !isSalesKind(kind) && "SKU",
     !dateHeader && "日期/月度",
   ].filter(Boolean);
 
@@ -234,7 +242,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     sheetName: best.sheetName,
     headers: best.headers,
     status: missing.length ? "mapping" : "ready",
-    message: missing.length ? `已保存，但未识别：${missing.join("、")}` : !skuHeader && kind === "sales" ? "销售底稿无SKU，将按品牌、品类、国家和月份分析" : "字段已自动识别，可用于滚动分析",
+    message: missing.length ? `已保存，但未识别：${missing.join("、")}` : !skuHeader && isSalesKind(kind) ? `${kind === "wholesale" ? "批发" : "零售"}底稿无SKU，将按品牌、品类、国家和月份分析` : "字段已自动识别，可用于滚动分析",
     summary: {
       quantity,
       amount,
@@ -254,6 +262,42 @@ function fmt(value: number, digits = 0) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(value);
 }
 
+function mergeSalesSources(retail?: Dataset, wholesale?: Dataset): Dataset | undefined {
+  const sources = [retail, wholesale].filter(Boolean) as Dataset[];
+  if (!sources.length) return undefined;
+  const mergeMap = (field: "monthly" | "sku" | "countries") => {
+    const result: Record<string, number> = {};
+    sources.forEach((source) => Object.entries(source[field]).forEach(([key, value]) => add(result, key, value)));
+    return result;
+  };
+  const monthly = mergeMap("monthly");
+  const sku = mergeMap("sku");
+  const countries = mergeMap("countries");
+  return {
+    schemaVersion: DATA_SCHEMA_VERSION,
+    kind: "sales",
+    fileName: sources.map((source) => source.fileName).join(" + "),
+    uploadedAt: sources.map((source) => source.uploadedAt).sort().at(-1) ?? "",
+    rowCount: sources.reduce((sum, source) => sum + source.rowCount, 0),
+    sheetName: "零售 + 批发",
+    headers: Array.from(new Set(sources.flatMap((source) => source.headers))),
+    status: sources.every((source) => source.status === "ready") ? "ready" : "mapping",
+    message: `已合并 ${retail ? "零售" : ""}${retail && wholesale ? " + " : ""}${wholesale ? "批发" : ""}销售`,
+    summary: {
+      quantity: sources.reduce((sum, source) => sum + source.summary.quantity, 0),
+      amount: sources.reduce((sum, source) => sum + (source.summary.amount ?? 0), 0),
+      skuCount: Object.keys(sku).length,
+      monthCount: Object.keys(monthly).length,
+      countryCount: Object.keys(countries).length,
+      latestMonth: Object.keys(monthly).sort().at(-1) ?? "",
+    },
+    monthly,
+    sku,
+    countries,
+    details: sources.flatMap((source) => source.details ?? []),
+  };
+}
+
 function nextMonths(start: string, count = 6) {
   const base = start ? new Date(`${start}-01T00:00:00`) : new Date();
   return Array.from({ length: count }, (_, index) => {
@@ -270,6 +314,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const [countryFilter, setCountryFilter] = useState("全部");
   const [categoryFilter, setCategoryFilter] = useState("全部");
   const [brandFilter, setBrandFilter] = useState("全部");
+  const [salesSourceFilter, setSalesSourceFilter] = useState("全部销售");
   const [middleCategoryFilter, setMiddleCategoryFilter] = useState("全部");
   const [smallCategoryFilter, setSmallCategoryFilter] = useState("全部");
   const [seriesFilter, setSeriesFilter] = useState("全部");
@@ -293,7 +338,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       .catch(() => setNotice("浏览器存储不可用，请检查隐私模式或网站存储权限"));
   }, []);
 
-  const sales = datasets.sales;
+  const sales = useMemo(() => mergeSalesSources(datasets.sales, datasets.wholesale), [datasets.sales, datasets.wholesale]);
   const inventory = datasets.inventory;
   const oih = datasets.oih;
   const salesMonths = Object.entries(sales?.monthly ?? {}).sort(([a], [b]) => a.localeCompare(b));
@@ -357,7 +402,10 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       return line;
     };
     (inventory?.details ?? []).filter((row) => !latestInventoryMonth || !row.month || row.month === latestInventoryMonth).forEach((row) => { const line = ensure(row); line.stock += row.quantity; line.stockAmount += row.amount ?? 0; });
-    (sales?.details ?? []).filter((row) => recentAnalysisMonths.includes(row.month)).forEach((row) => {
+    (sales?.details ?? []).filter((row) =>
+      recentAnalysisMonths.includes(row.month) &&
+      (salesSourceFilter === "全部销售" || row.sourceType === salesSourceFilter)
+    ).forEach((row) => {
       const line = ensure(row);
       line.sales3m += row.quantity / Math.max(recentAnalysisMonths.length, 1);
       line.sales3mAmount += (row.amount ?? 0) / Math.max(recentAnalysisMonths.length, 1);
@@ -380,7 +428,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       (riskFilter === "全部" || line.status === riskFilter) &&
       (!skuSearch || `${line.sku} ${line.name}`.toLowerCase().includes(skuSearch.toLowerCase())),
     ).sort((a, b) => b.stock - a.stock);
-  }, [sales?.details, inventory?.details, oih?.details, latestInventoryMonth, selectedMonth, recentAnalysisMonths.join("|"), countryFilter, brandFilter, categoryFilter, middleCategoryFilter, smallCategoryFilter, seriesFilter, riskFilter, skuSearch]);
+  }, [sales?.details, inventory?.details, oih?.details, latestInventoryMonth, selectedMonth, recentAnalysisMonths.join("|"), salesSourceFilter, countryFilter, brandFilter, categoryFilter, middleCategoryFilter, smallCategoryFilter, seriesFilter, riskFilter, skuSearch]);
 
   const analyticStock = skuAnalysis.reduce((sum, row) => sum + row.stock, 0);
   const analyticSales = skuAnalysis.reduce((sum, row) => sum + row.sales, 0);
@@ -494,6 +542,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         </div>
         <div className="analytics-filterbar">
           <label>分析月份<select value={selectedMonth} onChange={(event) => setAnalysisMonth(event.target.value)}><option value="">最新月份</option>{availableMonths.map((month) => <option key={month}>{month}</option>)}</select></label>
+          <label>销售类型<select value={salesSourceFilter} onChange={(event) => setSalesSourceFilter(event.target.value)}><option>全部销售</option><option>零售</option><option>批发</option></select></label>
           <label>品牌<select value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)}><option>全部</option>{filterBrands.map((brand) => <option key={brand}>{brand}</option>)}</select></label>
           <label>国家<select value={countryFilter} onChange={(event) => setCountryFilter(event.target.value)}><option>全部</option>{filterCountries.map((country) => <option key={country}>{country}</option>)}</select></label>
           <label>大类<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setMiddleCategoryFilter("全部"); setSmallCategoryFilter("全部"); }}><option>全部</option>{filterCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
