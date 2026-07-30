@@ -239,6 +239,15 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .upload-stats span { color:var(--muted); font-size:8px; }
 .upload-stats b { display:block; margin-top:3px; color:var(--ink); font-size:12px; }
 .detected-field { display:block; margin:2px 0 5px; color:#61798a; font-size:9px; }
+.sales-trend-panel { margin-top:14px; }
+.sales-revenue-trend { min-height:210px; }
+.sales-dimensions { margin-top:14px; }
+.sales-scale-list { display:grid; gap:11px; padding-top:8px; }
+.sales-scale-list > div { display:grid; grid-template-columns:minmax(90px,1.2fr) 3fr 70px; align-items:center; gap:10px; }
+.sales-scale-list strong { overflow:hidden; color:#193b54; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.sales-scale-list i { height:9px; overflow:hidden; border-radius:9px; background:#e8eef2; }
+.sales-scale-list i b { display:block; height:100%; border-radius:9px; background:#1672b8; }
+.sales-scale-list span { color:#173a55; font-size:10px; font-weight:800; text-align:right; }
 .parse-ok,.parse-warning { font-size:8px; }
 .parse-ok { color:var(--green); }.parse-warning { color:var(--amber); }
 .upload-actions { display:flex; align-items:center; gap:10px; margin-top:auto; padding-top:12px; }
