@@ -114,7 +114,7 @@ export default function Home() {
   const [items, setItems] = useState(seedItems);
   const [selectedSku, setSelectedSku] = useState(seedItems[2].sku);
   const [decision, setDecision] = useState("待财务决策");
-  const [activeTab, setActiveTab] = useState<"data" | "analytics" | "review" | "inventory" | "rules">("data");
+  const [activeTab, setActiveTab] = useState<"data" | "sales" | "inventory" | "overview" | "review" | "rules">("data");
   const [draft, setDraft] = useState({
     sku: "DEMO-003",
     country: "示例市场C",
@@ -176,8 +176,8 @@ export default function Home() {
       <header className="topbar">
         <div className="brandmark">W</div>
         <div>
-          <p className="eyebrow">FINANCE × MERCHANDISING</p>
-          <h1>Wilson Order Control Tower</h1>
+          <p className="eyebrow">MONTHLY BUSINESS ANALYTICS</p>
+          <h1>Sales & Inventory Management Center</h1>
         </div>
         <div className="header-right">
           <span className="data-pill"><i /> 数据更新至 2026-07-28</span>
@@ -187,17 +187,20 @@ export default function Home() {
       </header>
 
       <nav className="tabs" aria-label="页面导航">
-        <button className={activeTab === "data" ? "active" : ""} onClick={() => setActiveTab("data")}>数据与滚动看板</button>
-        <button className={activeTab === "analytics" ? "active" : ""} onClick={() => setActiveTab("analytics")}>销售与库存分析</button>
-        <button className={activeTab === "review" ? "active" : ""} onClick={() => setActiveTab("review")}>本次下单审核</button>
-        <button className={activeTab === "inventory" ? "active" : ""} onClick={() => setActiveTab("inventory")}>库存健康总览</button>
+        <button className={activeTab === "data" ? "active" : ""} onClick={() => setActiveTab("data")}>数据中心</button>
+        <button className={activeTab === "sales" ? "active" : ""} onClick={() => setActiveTab("sales")}>销售看板</button>
+        <button className={activeTab === "inventory" ? "active" : ""} onClick={() => setActiveTab("inventory")}>库存看板</button>
+        <button className={activeTab === "overview" ? "active" : ""} onClick={() => setActiveTab("overview")}>进销存总览</button>
+        <button className={activeTab === "review" ? "active" : ""} onClick={() => setActiveTab("review")}>下单审核</button>
         <button className={activeTab === "rules" ? "active" : ""} onClick={() => setActiveTab("rules")}>规则与口径</button>
-        <span className="source-note">R01销售 · M01库存 · Wilson OIH · VBR8订单</span>
+        <span className="source-note">零售 · 批发 · 库存 · OIH · 订单</span>
       </nav>
 
       <section className="workspace">
         {activeTab === "data" && <DataHub />}
-        {activeTab === "analytics" && <DataHub view="analytics" />}
+        {activeTab === "sales" && <DataHub view="sales" />}
+        {activeTab === "inventory" && <DataHub view="inventory" />}
+        {activeTab === "overview" && <DataHub view="analytics" />}
         {activeTab === "review" && (
           <>
             <div className="page-heading">
@@ -407,7 +410,7 @@ export default function Home() {
           </>
         )}
 
-        {activeTab === "inventory" && (
+        {false && (
           <section className="alternate">
             <div className="page-heading"><div><p className="eyebrow blue">INVENTORY HEALTH</p><h2>库存健康总览</h2><p>从品牌、国家、SKU和货季四个层级查看库存结果。</p></div></div>
             <div className="summary-grid inventory-cards">
