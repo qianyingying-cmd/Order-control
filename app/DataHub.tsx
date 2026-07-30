@@ -21,6 +21,7 @@ type DetailRecord = {
 };
 
 type Dataset = {
+  schemaVersion?: number;
   kind: DataKind;
   fileName: string;
   uploadedAt: string;
@@ -45,6 +46,7 @@ type Dataset = {
 
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
+const DATA_SCHEMA_VERSION = 3;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "销售数据", subtitle: "观远 R01 / 零售销售", accent: "blue" },
   { kind: "inventory", title: "月末库存", subtitle: "BI 库存余额 / M01", accent: "green" },
@@ -224,6 +226,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   ].filter(Boolean);
 
   return {
+    schemaVersion: DATA_SCHEMA_VERSION,
     kind,
     fileName,
     uploadedAt: new Date().toISOString(),
@@ -278,9 +281,14 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
 
   useEffect(() => {
     getAll()
-      .then((rows) => {
-        setDatasets(Object.fromEntries(rows.map((row) => [row.kind, row])));
-        setNotice(rows.length ? `已恢复 ${rows.length} 类数据，无需再次上传` : "尚未上传真实数据，可从三个数据源开始");
+      .then(async (rows) => {
+        const validRows = rows.filter((row) => row.schemaVersion === DATA_SCHEMA_VERSION);
+        const expiredRows = rows.filter((row) => row.schemaVersion !== DATA_SCHEMA_VERSION);
+        if (expiredRows.length) await Promise.all(expiredRows.map((row) => deleteOne(row.kind)));
+        setDatasets(Object.fromEntries(validRows.map((row) => [row.kind, row])));
+        setNotice(expiredRows.length
+          ? "旧版缓存口径已自动清除：请重新上传销售数据和月末库存"
+          : validRows.length ? `已恢复 ${validRows.length} 类数据，无需再次上传` : "尚未上传真实数据，可从三个数据源开始");
       })
       .catch(() => setNotice("浏览器存储不可用，请检查隐私模式或网站存储权限"));
   }, []);
@@ -304,7 +312,12 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const latestInventoryMonth = Array.from(new Set((inventory?.details ?? []).map((row) => row.month).filter(Boolean))).sort().at(-1) ?? "";
   const filterCountries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.country).filter(Boolean))).sort();
   const filterCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.category).filter(Boolean))).sort();
-  const filterBrands = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.brand).filter(Boolean))).sort();
+  const invalidBrandValues = new Set(["线上", "线下", "全部", "未识别"]);
+  const filterBrands = Array.from(new Set(
+    [...(sales?.details ?? []), ...(inventory?.details ?? [])]
+      .map((row) => row.brand.trim())
+      .filter((brand) => brand && !invalidBrandValues.has(brand)),
+  )).sort();
   const overviewMatches = (row: DetailRecord) => overviewBrand === "全部品牌" || row.brand === overviewBrand;
   const overviewInventoryRows = (inventory?.details ?? []).filter((row) => overviewMatches(row) && (!latestInventoryMonth || !row.month || row.month === latestInventoryMonth));
   const overviewSalesRows = (sales?.details ?? []).filter(overviewMatches);
