@@ -258,6 +258,11 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .analytics-filterbar { display:grid; grid-template-columns:repeat(5,minmax(110px,1fr)); gap:10px; margin-bottom:14px; padding:13px; background:#fff; border:1px solid var(--line); border-radius:10px; }
 .analytics-filterbar label { color:var(--muted); font-size:9px; font-weight:800; }
 .analytics-filterbar select,.analytics-filterbar input { width:100%; height:34px; margin-top:5px; padding:0 8px; border:1px solid #d8e0e7; border-radius:6px; background:#fbfcfd; color:var(--ink); font-size:10px; }
+.metric-switch { display:flex; align-items:flex-end; gap:5px; }
+.metric-switch > span { align-self:center; margin-right:3px; color:var(--muted); font-size:9px; font-weight:800; }
+.metric-switch button { height:34px; padding:0 10px; border:1px solid #d8e0e7; background:#fff; color:var(--muted); font-size:9px; }
+.metric-switch button:first-of-type { border-radius:6px 0 0 6px; }.metric-switch button:last-child { margin-left:-5px; border-radius:0 6px 6px 0; }
+.metric-switch button.active { position:relative; z-index:1; border-color:var(--blue); background:var(--blue-soft); color:var(--blue); font-weight:900; }
 .detail-upgrade-note { margin-bottom:14px; padding:13px 15px; border-left:4px solid var(--amber); border-radius:7px; background:var(--amber-soft); display:flex; gap:13px; align-items:center; font-size:10px; }
 .detail-upgrade-note strong { color:#80510d; white-space:nowrap; }.detail-upgrade-note span { color:#7f6744; }
 .analytics-kpis { grid-template-columns:repeat(4,1fr); }

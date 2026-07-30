@@ -17,6 +17,7 @@ type DetailRecord = {
   series: string;
   channel: string;
   quantity: number;
+  amount: number;
 };
 
 type Dataset = {
@@ -30,6 +31,7 @@ type Dataset = {
   message: string;
   summary: {
     quantity: number;
+    amount?: number;
     skuCount: number;
     monthCount: number;
     countryCount: number;
@@ -63,6 +65,9 @@ const aliases = {
   sales: ["零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
   inventory: ["期末库存数量", "库存数量", "可用库存", "期末库存", "库存", "数量", "qty", "quantity"],
   oih: ["oih", "在途数量", "订单数量", "下单数量", "未到货数量", "open order", "数量", "qty", "quantity"],
+  salesValue: ["吊牌销售金额", "销售吊牌金额", "零售吊牌金额", "吊牌金额", "零售金额", "销售金额", "retailvalue"],
+  inventoryValue: ["库存吊牌金额", "期末库存吊牌金额", "吊牌金额", "库存金额", "stockvalue"],
+  oihValue: ["oih吊牌金额", "订单吊牌金额", "在途吊牌金额", "吊牌金额", "订单金额"],
 };
 
 function clean(value: unknown) {
@@ -156,6 +161,8 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   if (!best) throw new Error("工作簿中没有可读取的数据");
   const quantityOptions = kind === "sales" ? aliases.sales : kind === "inventory" ? aliases.inventory : aliases.oih;
   const quantityHeader = findHeader(best.headers, quantityOptions);
+  const valueOptions = kind === "sales" ? aliases.salesValue : kind === "inventory" ? aliases.inventoryValue : aliases.oihValue;
+  const valueHeader = findHeader(best.headers, valueOptions);
   const skuHeader = findHeader(best.headers, aliases.sku);
   const countryHeader = findHeader(best.headers, aliases.country);
   const dateHeader = findHeader(best.headers, aliases.date);
@@ -171,10 +178,13 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const countries: Record<string, number> = {};
   const detailMap = new Map<string, DetailRecord>();
   let quantity = 0;
+  let amount = 0;
 
   best.rows.forEach((row) => {
     const qty = quantityHeader ? numeric(row[quantityHeader]) : 0;
+    const rowAmount = valueHeader ? numeric(row[valueHeader]) : 0;
     quantity += qty;
+    amount += rowAmount;
     add(sku, skuHeader ? String(row[skuHeader] ?? "").trim() : "", qty);
     add(countries, countryHeader ? String(row[countryHeader] ?? "").trim() : "", qty);
     add(monthly, dateHeader ? monthOf(row[dateHeader]) : "", qty);
@@ -191,8 +201,8 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     if (skuValue) {
       const key = [month, country, skuValue, name, brand, category, middleCategory, smallCategory, series, channel].join("¦");
       const current = detailMap.get(key);
-      if (current) current.quantity += qty;
-      else detailMap.set(key, { month, sku: skuValue, name, brand, country, category, middleCategory, smallCategory, series, channel, quantity: qty });
+      if (current) { current.quantity += qty; current.amount += rowAmount; }
+      else detailMap.set(key, { month, sku: skuValue, name, brand, country, category, middleCategory, smallCategory, series, channel, quantity: qty, amount: rowAmount });
     }
   });
   const months = Object.keys(monthly).sort();
@@ -213,6 +223,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     message: missing.length ? `已保存，但未识别：${missing.join("、")}` : "字段已自动识别，可用于滚动分析",
     summary: {
       quantity,
+      amount,
       skuCount: Object.keys(sku).length,
       monthCount: months.length,
       countryCount: Object.keys(countries).length,
@@ -250,6 +261,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const [seriesFilter, setSeriesFilter] = useState("全部");
   const [skuSearch, setSkuSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("全部");
+  const [metricMode, setMetricMode] = useState<"quantity" | "amount">("quantity");
   const inputs = useRef<Partial<Record<DataKind, HTMLInputElement | null>>>({});
 
   useEffect(() => {
@@ -286,11 +298,11 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const filterSeries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.series).filter(Boolean))).sort();
 
   const skuAnalysis = useMemo(() => {
-    type SkuLine = { key: string; sku: string; name: string; brand: string; country: string; category: string; middleCategory: string; smallCategory: string; series: string; channel: string; stock: number; sales: number; sales3m: number; oih: number; ratio: number; weeks: number; status: string };
+    type SkuLine = { key: string; sku: string; name: string; brand: string; country: string; category: string; middleCategory: string; smallCategory: string; series: string; channel: string; stock: number; stockAmount: number; sales: number; salesAmount: number; sales3m: number; sales3mAmount: number; oih: number; oihAmount: number; ratio: number; amountRatio: number; weeks: number; status: string };
     const lines = new Map<string, SkuLine>();
     const ensure = (row: DetailRecord) => {
       const key = `${row.country}¦${row.sku}`;
-      if (!lines.has(key)) lines.set(key, { key, sku: row.sku, name: row.name, brand: row.brand, country: row.country, category: row.category, middleCategory: row.middleCategory, smallCategory: row.smallCategory, series: row.series, channel: row.channel, stock: 0, sales: 0, sales3m: 0, oih: 0, ratio: 0, weeks: 0, status: "" });
+      if (!lines.has(key)) lines.set(key, { key, sku: row.sku, name: row.name, brand: row.brand, country: row.country, category: row.category, middleCategory: row.middleCategory, smallCategory: row.smallCategory, series: row.series, channel: row.channel, stock: 0, stockAmount: 0, sales: 0, salesAmount: 0, sales3m: 0, sales3mAmount: 0, oih: 0, oihAmount: 0, ratio: 0, amountRatio: 0, weeks: 0, status: "" });
       const line = lines.get(key)!;
       if (!line.name && row.name) line.name = row.name;
       if (!line.category && row.category) line.category = row.category;
@@ -301,15 +313,17 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       if (!line.channel && row.channel) line.channel = row.channel;
       return line;
     };
-    (inventory?.details ?? []).filter((row) => !latestInventoryMonth || !row.month || row.month === latestInventoryMonth).forEach((row) => { ensure(row).stock += row.quantity; });
+    (inventory?.details ?? []).filter((row) => !latestInventoryMonth || !row.month || row.month === latestInventoryMonth).forEach((row) => { const line = ensure(row); line.stock += row.quantity; line.stockAmount += row.amount ?? 0; });
     (sales?.details ?? []).filter((row) => recentAnalysisMonths.includes(row.month)).forEach((row) => {
       const line = ensure(row);
       line.sales3m += row.quantity / Math.max(recentAnalysisMonths.length, 1);
-      if (row.month === selectedMonth) line.sales += row.quantity;
+      line.sales3mAmount += (row.amount ?? 0) / Math.max(recentAnalysisMonths.length, 1);
+      if (row.month === selectedMonth) { line.sales += row.quantity; line.salesAmount += row.amount ?? 0; }
     });
-    (oih?.details ?? []).forEach((row) => { ensure(row).oih += row.quantity; });
+    (oih?.details ?? []).forEach((row) => { const line = ensure(row); line.oih += row.quantity; line.oihAmount += row.amount ?? 0; });
     return Array.from(lines.values()).map((line) => {
       line.ratio = line.sales3m > 0 ? line.stock / line.sales3m : line.stock > 0 ? 999 : 0;
+      line.amountRatio = line.sales3mAmount > 0 ? line.stockAmount / line.sales3mAmount : line.stockAmount > 0 ? 999 : 0;
       line.weeks = line.sales3m > 0 ? line.ratio * 4.33 : line.stock > 0 ? 999 : 0;
       line.status = line.stock > 0 && line.sales3m <= 0 ? "无动销" : line.ratio > 6 ? "高库存" : line.ratio < 1 && line.sales3m > 0 ? "缺货风险" : "健康";
       return line;
@@ -328,18 +342,24 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const analyticStock = skuAnalysis.reduce((sum, row) => sum + row.stock, 0);
   const analyticSales = skuAnalysis.reduce((sum, row) => sum + row.sales, 0);
   const analyticVelocity = skuAnalysis.reduce((sum, row) => sum + row.sales3m, 0);
+  const analyticStockAmount = skuAnalysis.reduce((sum, row) => sum + row.stockAmount, 0);
+  const analyticSalesAmount = skuAnalysis.reduce((sum, row) => sum + row.salesAmount, 0);
+  const analyticVelocityAmount = skuAnalysis.reduce((sum, row) => sum + row.sales3mAmount, 0);
   const analyticRatio = analyticVelocity ? analyticStock / analyticVelocity : 0;
+  const analyticAmountRatio = analyticVelocityAmount ? analyticStockAmount / analyticVelocityAmount : 0;
   const stockedSku = skuAnalysis.filter((row) => row.stock > 0).length;
   const movingSku = skuAnalysis.filter((row) => row.sales3m > 0).length;
   const zeroMovingStock = skuAnalysis.filter((row) => row.status === "无动销").reduce((sum, row) => sum + row.stock, 0);
   const healthyRate = stockedSku ? skuAnalysis.filter((row) => row.status === "健康").length / stockedSku : 0;
   const dimensionSummary = (field: "brand" | "category" | "middleCategory" | "smallCategory" | "series" | "country") => {
-    const grouped = new Map<string, { name: string; stock: number; sales: number }>();
+    const grouped = new Map<string, { name: string; stock: number; sales: number; stockAmount: number; salesAmount: number }>();
     skuAnalysis.forEach((row) => {
       const name = row[field] || "未识别";
-      const current = grouped.get(name) ?? { name, stock: 0, sales: 0 };
+      const current = grouped.get(name) ?? { name, stock: 0, sales: 0, stockAmount: 0, salesAmount: 0 };
       current.stock += row.stock;
       current.sales += row.sales3m;
+      current.stockAmount += row.stockAmount;
+      current.salesAmount += row.sales3mAmount;
       grouped.set(name, current);
     });
     return Array.from(grouped.values()).sort((a, b) => b.stock - a.stock).slice(0, 10);
@@ -439,6 +459,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <label>系列<select value={seriesFilter} onChange={(event) => setSeriesFilter(event.target.value)}><option>全部</option>{filterSeries.map((series) => <option key={series}>{series}</option>)}</select></label>
           <label>库存状态<select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>{["全部", "健康", "高库存", "无动销", "缺货风险"].map((status) => <option key={status}>{status}</option>)}</select></label>
           <label className="search-filter">SKU / 商品<input value={skuSearch} onChange={(event) => setSkuSearch(event.target.value)} placeholder="输入货号或品名" /></label>
+          <div className="metric-switch"><span>图表口径</span><button className={metricMode === "quantity" ? "active" : ""} onClick={() => setMetricMode("quantity")}>数量</button><button className={metricMode === "amount" ? "active" : ""} onClick={() => setMetricMode("amount")}>吊牌金额</button></div>
         </div>
         {!detailReady && <div className="detail-upgrade-note"><strong>需要重新上传销售与库存文件</strong><span>旧版只保存总量汇总；新版上传后会保留SKU、国家、品类、渠道和月份维度，才能生成细颗粒度分析。</span></div>}
         <div className="summary-grid analytics-kpis">
@@ -450,6 +471,10 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <article><span>平均深度</span><strong>{detailReady && stockedSku ? fmt(analyticStock / stockedSku, 1) : "—"} <em>件/SKU</em></strong><small>库存数量 ÷ 有库存SKU</small></article>
           <article><span>无动销库存</span><strong className="red">{detailReady ? fmt(zeroMovingStock) : "—"} <em>件</em></strong><small>近3月无销售但仍有库存</small></article>
           <article><span>健康SKU占比</span><strong>{detailReady ? `${(healthyRate * 100).toFixed(1)}%` : "—"}</strong><small>库销比1–6个月且持续动销</small></article>
+          <article><span>库存吊牌金额</span><strong>{detailReady ? fmt(analyticStockAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
+          <article><span>当月销售吊牌金额</span><strong>{detailReady ? fmt(analyticSalesAmount / 10000, 1) : "—"} <em>万元</em></strong><small>{selectedMonth || "等待销售月份"} · RMB吊牌</small></article>
+          <article><span>金额库销比</span><strong className={analyticAmountRatio > 6 ? "red" : analyticAmountRatio > 4 ? "amber" : ""}>{detailReady ? analyticAmountRatio.toFixed(1) : "—"} <em>月</em></strong><small>库存吊牌额 ÷ 近3月月均销售吊牌额</small></article>
+          <article><span>近3月月均销售额</span><strong>{detailReady ? fmt(analyticVelocityAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
         </div>
         <div className="analytics-panels">
           <section className="panel status-distribution">
@@ -473,20 +498,20 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
             ["国家库存分布", countryMix],
             ["系列库存结构", seriesMix],
           ].map(([title, rows]) => {
-            const data = rows as Array<{ name: string; stock: number; sales: number }>;
-            const maxStock = Math.max(...data.map((row) => row.stock), 1);
+            const data = rows as Array<{ name: string; stock: number; sales: number; stockAmount: number; salesAmount: number }>;
+            const maxStock = Math.max(...data.map((row) => metricMode === "amount" ? row.stockAmount : row.stock), 1);
             return <section className="panel dimension-panel" key={title as string}><div className="panel-title"><div><h3>{title as string}</h3></div><span className="legend"><span className="line-key actual" />库存 <span className="line-key target" />月均销售</span></div>
-              <div className="dimension-list">{data.length ? data.map((row) => <div key={row.name}><strong>{row.name}</strong><div className="dual-bar"><i style={{ width: `${row.stock / maxStock * 100}%` }} /><b style={{ width: `${Math.min(100, row.sales / maxStock * 100)}%` }} /></div><span>{fmt(row.stock)} / {fmt(row.sales, 1)}</span></div>) : <p>等待维度数据</p>}</div>
+              <div className="dimension-list">{data.length ? data.map((row) => { const stockValue = metricMode === "amount" ? row.stockAmount / 10000 : row.stock; const salesValue = metricMode === "amount" ? row.salesAmount / 10000 : row.sales; const scaleStock = metricMode === "amount" ? row.stockAmount : row.stock; const scaleSales = metricMode === "amount" ? row.salesAmount : row.sales; return <div key={row.name}><strong>{row.name}</strong><div className="dual-bar"><i style={{ width: `${scaleStock / maxStock * 100}%` }} /><b style={{ width: `${Math.min(100, scaleSales / maxStock * 100)}%` }} /></div><span>{fmt(stockValue, metricMode === "amount" ? 1 : 0)} / {fmt(salesValue, 1)}{metricMode === "amount" ? "万" : ""}</span></div>; }) : <p>等待维度数据</p>}</div>
             </section>;
           })}
         </div>
         <section className="panel sku-diagnostic">
           <div className="panel-title"><div><span className="step">03</span><h3>SKU经营诊断明细</h3></div><span className="unit">{fmt(skuAnalysis.length)} 行 · 点击上方筛选</span></div>
-          <div className="table-wrap"><table><thead><tr><th>SKU / 商品</th><th>品牌</th><th>国家</th><th>大/中/小类</th><th>系列 / 渠道</th><th>期末库存</th><th>当月销售</th><th>近3月月均</th><th>库销比</th><th>库存周数</th><th>OIH</th><th>诊断</th></tr></thead>
-          <tbody>{skuAnalysis.slice(0, 500).map((row) => <tr key={row.key}><td><strong>{row.sku}</strong><small>{row.name || "未识别品名"}</small></td><td>{row.brand || "未识别"}</td><td>{row.country || "未识别"}</td><td><strong>{row.category || "—"} / {row.middleCategory || "—"}</strong><small>{row.smallCategory || "未识别小类"}</small></td><td><strong>{row.series || "未识别系列"}</strong><small>{row.channel || "未识别渠道"}</small></td><td><strong>{fmt(row.stock)}</strong></td><td>{fmt(row.sales)}</td><td>{fmt(row.sales3m, 1)}</td><td>{row.ratio >= 999 ? "无销量" : `${row.ratio.toFixed(1)}月`}</td><td>{row.weeks >= 999 ? "无销量" : `${row.weeks.toFixed(1)}周`}</td><td>{fmt(row.oih)}</td><td><span className={`diagnostic-tag ${row.status}`}>{row.status}</span></td></tr>)}</tbody></table></div>
+          <div className="table-wrap"><table><thead><tr><th>SKU / 商品</th><th>品牌</th><th>国家</th><th>大/中/小类</th><th>系列 / 渠道</th><th>期末库存</th><th>库存吊牌额<br/>万元</th><th>当月销售</th><th>销售吊牌额<br/>万元</th><th>近3月月均</th><th>数量库销比</th><th>金额库销比</th><th>OIH</th><th>诊断</th></tr></thead>
+          <tbody>{skuAnalysis.slice(0, 500).map((row) => <tr key={row.key}><td><strong>{row.sku}</strong><small>{row.name || "未识别品名"}</small></td><td>{row.brand || "未识别"}</td><td>{row.country || "未识别"}</td><td><strong>{row.category || "—"} / {row.middleCategory || "—"}</strong><small>{row.smallCategory || "未识别小类"}</small></td><td><strong>{row.series || "未识别系列"}</strong><small>{row.channel || "未识别渠道"}</small></td><td><strong>{fmt(row.stock)}</strong></td><td>{fmt(row.stockAmount / 10000, 1)}</td><td>{fmt(row.sales)}</td><td>{fmt(row.salesAmount / 10000, 1)}</td><td>{fmt(row.sales3m, 1)}</td><td>{row.ratio >= 999 ? "无销量" : `${row.ratio.toFixed(1)}月`}</td><td>{row.amountRatio >= 999 ? "无金额" : `${row.amountRatio.toFixed(1)}月`}</td><td>{fmt(row.oih)}</td><td><span className={`diagnostic-tag ${row.status}`}>{row.status}</span></td></tr>)}</tbody></table></div>
           {skuAnalysis.length > 500 && <p className="table-limit">当前显示库存最高的500行，请使用筛选缩小范围。</p>}
         </section>
-        <p className="privacy-note">计算口径：库存取最新可识别库存月份；当月销售取所选月份；库销比和库存周数使用截至所选月份的最近3个月月均销量。无销量但有库存归类为“无动销”。</p>
+        <p className="privacy-note">计算口径：库存取最新可识别库存月份；当月销售取所选月份；数量与金额库销比均使用截至所选月份的最近3个月月均销售。金额统一采用RMB吊牌价并换算为万元（源表金额 ÷ 10,000）。</p>
       </section>
     );
   }
