@@ -240,9 +240,12 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .upload-stats b { display:block; margin-top:3px; color:var(--ink); font-size:12px; }
 .detected-field { display:block; margin:2px 0 5px; color:#61798a; font-size:9px; }
 .sales-trend-panel { margin-top:14px; }
-.sales-revenue-trend { min-height:210px; }
+.sales-revenue-trend {
+  min-height:210px;
+  background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(25% - 1px),#edf2f5 25%);
+}
 .sales-dimensions { margin-top:14px; }
-.sales-scale-list { display:grid; gap:11px; padding-top:8px; }
+.sales-scale-list { display:grid; gap:11px; padding:12px 18px 18px; }
 .sales-scale-list > div { display:grid; grid-template-columns:minmax(90px,1.2fr) 3fr 70px; align-items:center; gap:10px; }
 .sales-scale-list strong { overflow:hidden; color:#193b54; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .sales-scale-list i { height:9px; overflow:hidden; border-radius:9px; background:#e8eef2; }
@@ -260,10 +263,10 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .data-conclusion > strong { flex:0 0 auto; padding:7px 10px; border:1px solid rgba(255,255,255,.22); border-radius:14px; color:#d7e7f2; font-size:9px; }
 .data-analysis-grid { display:grid; grid-template-columns:.8fr 1.2fr; gap:16px; margin-bottom:14px; }
 .mini-trend { height:270px; padding:22px 18px 18px; display:flex; align-items:flex-end; gap:9px; }
-.mini-trend > div { flex:1; height:100%; display:grid; grid-template-rows:1fr auto auto; justify-items:center; align-items:end; gap:5px; }
-.mini-trend i { width:min(25px,70%); min-height:5px; background:linear-gradient(180deg,#3b8ec6,#1769aa); border-radius:4px 4px 0 0; }
-.mini-trend span { color:var(--muted); font-size:8px; }
-.mini-trend b { font-size:8px; }
+.mini-trend > div { flex:1; height:100%; display:grid; grid-template-rows:minmax(0,1fr) auto auto; justify-items:center; gap:5px; }
+.mini-trend i { grid-row:1; align-self:end; width:min(25px,70%); min-height:5px; background:linear-gradient(180deg,#3b8ec6,#1769aa); border-radius:4px 4px 0 0; box-shadow:0 2px 5px rgba(23,105,170,.16); }
+.mini-trend span { grid-row:2; color:var(--muted); font-size:8px; }
+.mini-trend b { grid-row:3; font-size:8px; }
 .empty-panel { height:270px; display:grid; place-items:center; color:#8a96a2; font-size:11px; }
 .data-roll { padding-top:18px; }
 .privacy-note { margin:0; padding:10px 12px; border-left:3px solid #9fb3c3; background:#eef3f6; color:#627183; font-size:9px; line-height:1.55; }
