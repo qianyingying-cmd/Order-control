@@ -70,6 +70,7 @@ const aliases = {
   series: ["系列", "商品系列", "产品系列", "series"],
   channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
   storeType: ["经营类型", "门店类型", "店铺类型", "经营性质", "storetype"],
+  onlinePlatform: ["一级平台（线上）", "一级平台线上", "线上平台", "电商平台", "平台"],
   date: ["单据/出库/收货月份", "单据出库收货月份", "单据月份", "出库月份", "收货月份", "日历月份", "库存日期", "单据日期", "出库日期", "收货日期", "过账日期", "销售日期", "库存月份", "快照日期", "日期", "月份", "年月", "date", "month"],
   sales: ["本期零售数量", "零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
   wholesale: ["本期批发数量", "批发数量", "批发销售数量", "出库数量", "发货数量", "销售数量", "销量", "数量", "qty", "quantity"],
@@ -97,6 +98,12 @@ function normalizeBrand(value: unknown) {
   if (/FILA|斐乐/.test(normalized)) return "FILA";
   if (/ANTA|安踏/.test(normalized)) return "ANTA";
   return "";
+}
+
+function normalizeCountry(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (/^(马来|马来西亚|malaysia)$/i.test(raw)) return "马来西亚";
+  return raw;
 }
 
 function clean(value: unknown) {
@@ -226,6 +233,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const seriesHeader = findHeader(best.headers, aliases.series);
   const channelHeader = findHeader(best.headers, aliases.channel);
   const storeTypeHeader = findHeader(best.headers, aliases.storeType);
+  const onlinePlatformHeader = findHeader(best.headers, aliases.onlinePlatform);
   const monthly: Record<string, number> = {};
   const sku: Record<string, number> = {};
   const countries: Record<string, number> = {};
@@ -235,8 +243,9 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   let revenue = 0;
 
   best.rows.forEach((row) => {
-    const rowCountry = countryHeader ? String(row[countryHeader] ?? "").trim() : "";
+    const rowCountry = normalizeCountry(countryHeader ? row[countryHeader] : "");
     const rowStoreType = storeTypeHeader ? String(row[storeTypeHeader] ?? "").trim() : "";
+    const rowOnlinePlatform = onlinePlatformHeader ? String(row[onlinePlatformHeader] ?? "").trim() : "";
     const isVietnamFranchiseRetail =
       kind === "sales" &&
       /越南|vietnam/i.test(rowCountry) &&
@@ -249,7 +258,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     amount += rowAmount;
     revenue += rowRevenue;
     add(sku, skuHeader ? String(row[skuHeader] ?? "").trim() : "", qty);
-    add(countries, countryHeader ? String(row[countryHeader] ?? "").trim() : "", qty);
+    add(countries, rowCountry, qty);
     add(monthly, dateHeader ? monthOf(row[dateHeader]) : "", qty);
     const month = dateHeader ? monthOf(row[dateHeader]) : "";
     const skuValue = skuHeader ? String(row[skuHeader] ?? "").trim() : "";
@@ -260,7 +269,16 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const middleCategory = middleCategoryHeader ? String(row[middleCategoryHeader] ?? "").trim() : "";
     const smallCategory = smallCategoryHeader ? String(row[smallCategoryHeader] ?? "").trim() : "";
     const series = seriesHeader ? String(row[seriesHeader] ?? "").trim() : "";
-    const channel = channelHeader ? String(row[channelHeader] ?? "").trim() : "";
+    const rawChannel = channelHeader ? String(row[channelHeader] ?? "").trim() : "";
+    const channel = kind === "wholesale"
+      ? "批发"
+      : kind === "sales"
+        ? (rowOnlinePlatform || /电商|线上|shopee|lazada|tiktok|online|e-?commerce/i.test(rawChannel)
+            ? "电商"
+            : /自营/.test(rowStoreType)
+              ? "自营"
+              : "联营")
+        : rawChannel;
     const analysisSku = skuValue || (isSalesKind(kind) ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
     if (analysisSku) {
       const key = [month, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel].join("¦");
