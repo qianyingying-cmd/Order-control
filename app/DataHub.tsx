@@ -51,6 +51,7 @@ type Dataset = {
 const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
 const DATA_SCHEMA_VERSION = 9;
+const SALES_SCHEMA_VERSION = 10;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
@@ -86,6 +87,10 @@ const aliases = {
 
 function isSalesKind(kind: DataKind) {
   return kind === "sales" || kind === "wholesale";
+}
+
+function schemaVersionFor(kind: DataKind) {
+  return isSalesKind(kind) ? SALES_SCHEMA_VERSION : DATA_SCHEMA_VERSION;
 }
 
 function normalizeBrand(value: unknown) {
@@ -295,7 +300,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   ].filter(Boolean);
 
   return {
-    schemaVersion: DATA_SCHEMA_VERSION,
+    schemaVersion: schemaVersionFor(kind),
     kind,
     fileName,
     uploadedAt: new Date().toISOString(),
@@ -337,7 +342,7 @@ function mergeSalesSources(retail?: Dataset, wholesale?: Dataset): Dataset | und
   const sku = mergeMap("sku");
   const countries = mergeMap("countries");
   return {
-    schemaVersion: DATA_SCHEMA_VERSION,
+    schemaVersion: SALES_SCHEMA_VERSION,
     kind: "sales",
     fileName: sources.map((source) => source.fileName).join(" + "),
     uploadedAt: sources.map((source) => source.uploadedAt).sort().at(-1) ?? "",
@@ -392,12 +397,12 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   useEffect(() => {
     getAll()
       .then(async (rows) => {
-        const validRows = rows.filter((row) => row.schemaVersion === DATA_SCHEMA_VERSION);
-        const expiredRows = rows.filter((row) => row.schemaVersion !== DATA_SCHEMA_VERSION);
+        const validRows = rows.filter((row) => row.schemaVersion === schemaVersionFor(row.kind));
+        const expiredRows = rows.filter((row) => row.schemaVersion !== schemaVersionFor(row.kind));
         if (expiredRows.length) await Promise.all(expiredRows.map((row) => deleteOne(row.kind)));
         setDatasets(Object.fromEntries(validRows.map((row) => [row.kind, row])));
         setNotice(expiredRows.length
-          ? "旧版缓存口径已自动清除：请重新上传销售数据和月末库存"
+          ? "旧版销售渠道口径已自动清除：请重新上传 R01 和批发销售；库存与 OIH 已保留"
           : validRows.length ? `已恢复 ${validRows.length} 类数据，无需再次上传` : "尚未上传真实数据，可从三个数据源开始");
       })
       .catch(() => setNotice("浏览器存储不可用，请检查隐私模式或网站存储权限"));
