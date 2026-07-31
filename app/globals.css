@@ -242,8 +242,10 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .sales-trend-panel { margin-top:14px; }
 .sales-revenue-trend {
   min-height:210px;
+  overflow-x:auto;
   background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(25% - 1px),#edf2f5 25%);
 }
+.sales-revenue-trend > div { min-width:42px; }
 .sales-dimensions { margin-top:14px; }
 .sales-scale-list { display:grid; gap:11px; padding:12px 18px 18px; }
 .sales-scale-list > div { display:grid; grid-template-columns:minmax(90px,1.2fr) 3fr 70px; align-items:center; gap:10px; }
