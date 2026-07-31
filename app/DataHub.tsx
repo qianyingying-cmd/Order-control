@@ -368,6 +368,49 @@ function mergeSalesSources(retail?: Dataset, wholesale?: Dataset): Dataset | und
   };
 }
 
+function mergeInventorySnapshots(existing: Dataset | undefined, incoming: Dataset): Dataset {
+  const incomingMonths = new Set((incoming.details ?? []).map((row) => row.month).filter(Boolean));
+  if (!incomingMonths.size) throw new Error("未识别库存日期，请确认底稿包含库存日期或月份字段");
+  const details = [
+    ...(existing?.details ?? []).filter((row) => !incomingMonths.has(row.month)),
+    ...(incoming.details ?? []),
+  ];
+  const monthly: Record<string, number> = {};
+  const sku: Record<string, number> = {};
+  const countries: Record<string, number> = {};
+  let quantity = 0;
+  let amount = 0;
+  details.forEach((row) => {
+    quantity += row.quantity;
+    amount += row.amount ?? 0;
+    add(monthly, row.month, row.quantity);
+    add(sku, row.sku, row.quantity);
+    add(countries, row.country, row.quantity);
+  });
+  const months = Object.keys(monthly).sort();
+  return {
+    ...incoming,
+    fileName: `${months.length}个月末库存快照`,
+    uploadedAt: new Date().toISOString(),
+    rowCount: details.length,
+    headers: Array.from(new Set([...(existing?.headers ?? []), ...incoming.headers])),
+    message: `已保存 ${months.length} 个月末库存；重复月份自动覆盖`,
+    summary: {
+      quantity,
+      amount,
+      skuCount: Object.keys(sku).length,
+      monthCount: months.length,
+      countryCount: Object.keys(countries).length,
+      latestMonth: months.at(-1) ?? "",
+      detectedDateField: incoming.summary.detectedDateField || existing?.summary.detectedDateField || "",
+    },
+    monthly,
+    sku,
+    countries,
+    details,
+  };
+}
+
 function nextMonths(start: string, count = 6) {
   const base = start ? new Date(`${start}-01T00:00:00`) : new Date();
   return Array.from({ length: count }, (_, index) => {
@@ -389,6 +432,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const [notice, setNotice] = useState("正在读取本机已保存的数据…");
   const [analysisMonth, setAnalysisMonth] = useState("");
   const [salesStartMonth, setSalesStartMonth] = useState("");
+  const [inventoryAnalysisMonth, setInventoryAnalysisMonth] = useState("");
   const [countryFilter, setCountryFilter] = useState("全部");
   const [categoryFilter, setCategoryFilter] = useState("全部");
   const [brandFilter, setBrandFilter] = useState("全部");
@@ -441,6 +485,8 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const salesRangeMonths = availableMonths.filter((month) => month >= salesRangeStart && month <= salesRangeEnd);
   const recentAnalysisMonths = selectedMonth ? availableMonths.filter((month) => month <= selectedMonth).slice(-3) : [];
   const latestInventoryMonth = Array.from(new Set((inventory?.details ?? []).map((row) => row.month).filter(Boolean))).sort().at(-1) ?? "";
+  const inventorySnapshotMonths = Array.from(new Set((inventory?.details ?? []).map((row) => row.month).filter(Boolean))).sort().reverse();
+  const inventoryViewMonth = view === "inventory" ? (inventoryAnalysisMonth || latestInventoryMonth) : latestInventoryMonth;
   const filterCountries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.country).filter(Boolean))).sort();
   const filterCategories = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.category).filter(Boolean))).sort();
   const presentBrands = new Set(
@@ -532,7 +578,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       if (!line.channel && row.channel) line.channel = row.channel;
       return line;
     };
-    (inventory?.details ?? []).filter((row) => !latestInventoryMonth || !row.month || row.month === latestInventoryMonth).forEach((row) => { const line = ensure(row); line.stock += row.quantity; line.stockAmount += row.amount ?? 0; });
+    (inventory?.details ?? []).filter((row) => !inventoryViewMonth || !row.month || row.month === inventoryViewMonth).forEach((row) => { const line = ensure(row); line.stock += row.quantity; line.stockAmount += row.amount ?? 0; });
     (sales?.details ?? []).filter((row) =>
       recentAnalysisMonths.includes(row.month) &&
       (salesSourceFilter === "全部销售" || row.sourceType === salesSourceFilter)
@@ -559,7 +605,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       (riskFilter === "全部" || line.status === riskFilter) &&
       (!skuSearch || `${line.sku} ${line.name}`.toLowerCase().includes(skuSearch.toLowerCase())),
     ).sort((a, b) => b.stock - a.stock);
-  }, [sales?.details, inventory?.details, oih?.details, latestInventoryMonth, selectedMonth, recentAnalysisMonths.join("|"), salesSourceFilter, countryFilter, brandFilter, categoryFilter, middleCategoryFilter, smallCategoryFilter, seriesFilter, riskFilter, skuSearch]);
+  }, [sales?.details, inventory?.details, oih?.details, inventoryViewMonth, selectedMonth, recentAnalysisMonths.join("|"), salesSourceFilter, countryFilter, brandFilter, categoryFilter, middleCategoryFilter, smallCategoryFilter, seriesFilter, riskFilter, skuSearch]);
 
   const analyticStock = skuAnalysis.reduce((sum, row) => sum + row.stock, 0);
   const analyticSales = skuAnalysis.reduce((sum, row) => sum + row.sales, 0);
@@ -611,9 +657,12 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
     setNotice(`正在解析 ${file.name}…`);
     try {
       const parsed = parseWorkbook(await file.arrayBuffer(), kind, file.name);
-      await putOne(parsed);
-      setDatasets((current) => ({ ...current, [kind]: parsed }));
-      setNotice(`${file.name} 已保存；下次打开会自动恢复`);
+      const saved = kind === "inventory" ? mergeInventorySnapshots(datasets.inventory, parsed) : parsed;
+      await putOne(saved);
+      setDatasets((current) => ({ ...current, [kind]: saved }));
+      setNotice(kind === "inventory"
+        ? `${file.name} 已按月份追加；相同月份已自动覆盖`
+        : `${file.name} 已保存；下次打开会自动恢复`);
     } catch (error) {
       setNotice(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请检查文件格式");
     } finally {
@@ -630,6 +679,28 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       return next;
     });
     setNotice("已删除该类本机数据，可随时重新上传");
+  }
+
+  async function removeInventoryMonth(month: string) {
+    const current = datasets.inventory;
+    if (!current) return;
+    const remaining = (current.details ?? []).filter((row) => row.month !== month);
+    if (!remaining.length) {
+      await remove("inventory");
+      return;
+    }
+    const placeholder: Dataset = {
+      ...current,
+      details: remaining,
+      monthly: {},
+      sku: {},
+      countries: {},
+      summary: { ...current.summary, quantity: 0, amount: 0, skuCount: 0, monthCount: 0, countryCount: 0, latestMonth: "" },
+    };
+    const rebuilt = mergeInventorySnapshots(undefined, placeholder);
+    await putOne(rebuilt);
+    setDatasets((datasetsNow) => ({ ...datasetsNow, inventory: rebuilt }));
+    setNotice(`已删除 ${month} 月末库存快照`);
   }
 
   function exportBackup() {
@@ -682,7 +753,9 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           {view === "sales" ? <>
             <label>开始月份<select value={salesRangeStart} onChange={(event) => setSalesStartMonth(event.target.value)}>{availableMonths.filter((month) => month <= salesRangeEnd).map((month) => <option key={month}>{month}</option>)}</select></label>
             <label>结束月份<select value={salesRangeEnd} onChange={(event) => setAnalysisMonth(event.target.value)}>{availableMonths.filter((month) => month >= salesRangeStart).map((month) => <option key={month}>{month}</option>)}</select></label>
-          </> : <label>分析月份<select value={selectedMonth} onChange={(event) => setAnalysisMonth(event.target.value)}><option value="">最新月份</option>{availableMonths.map((month) => <option key={month}>{month}</option>)}</select></label>}
+          </> : view === "inventory"
+            ? <label>库存快照月份<select value={inventoryViewMonth} onChange={(event) => setInventoryAnalysisMonth(event.target.value)}>{inventorySnapshotMonths.map((month) => <option key={month}>{month}</option>)}</select></label>
+            : <label>分析月份<select value={selectedMonth} onChange={(event) => setAnalysisMonth(event.target.value)}><option value="">最新月份</option>{availableMonths.map((month) => <option key={month}>{month}</option>)}</select></label>}
           <label>销售类型<select value={salesSourceFilter} onChange={(event) => setSalesSourceFilter(event.target.value)}><option>全部销售</option><option>零售</option><option>批发</option></select></label>
           <label>品牌<select value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)}><option>全部</option>{filterBrands.map((brand) => <option key={brand}>{brand}</option>)}</select></label>
           <label>国家<select value={countryFilter} onChange={(event) => setCountryFilter(event.target.value)}><option>全部</option>{filterCountries.map((country) => <option key={country}>{country}</option>)}</select></label>
@@ -705,7 +778,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <article><span>{view === "sales" ? "区间销量" : "当月销量"}</span><strong>{detailReady ? fmt(salesQuantity) : "—"} <em>件</em></strong><small>{salesSourceFilter}</small></article>
           </>}
           {view !== "sales" && <>
-          <article><span>期末库存</span><strong>{detailReady ? fmt(analyticStock) : "—"} <em>件</em></strong><small>{latestInventoryMonth || "等待库存月份"}</small></article>
+          <article><span>期末库存</span><strong>{detailReady ? fmt(analyticStock) : "—"} <em>件</em></strong><small>{inventoryViewMonth || "等待库存月份"}</small></article>
           <article><span>库销比</span><strong className={analyticRatio > 6 ? "red" : analyticRatio > 4 ? "amber" : ""}>{detailReady ? analyticRatio.toFixed(1) : "—"} <em>月</em></strong><small>库存 ÷ 近3月月均销量</small></article>
           <article><span>动销率</span><strong>{detailReady && stockedSku ? `${((movingSku / stockedSku) * 100).toFixed(1)}%` : "—"}</strong><small>有销量SKU ÷ 有库存SKU</small></article>
           <article><span>库存宽度</span><strong>{detailReady ? fmt(stockedSku) : "—"} <em>SKU</em></strong><small>当前有库存的SKU数量</small></article>
@@ -824,12 +897,16 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
                   <p>{fmt(data.rowCount)} 行 · {data.sheetName} · {new Date(data.uploadedAt).toLocaleString("zh-CN")}</p>
                   <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>{isSalesKind(source.kind) ? "流水" : "吊牌额"} <b>{fmt(((isSalesKind(source.kind) ? data.summary.revenue : data.summary.amount) ?? 0) / 10000, 1)}万</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
                   <small className="detected-field">月份字段：{data.summary.detectedDateField || "未识别"}</small>
+                  {source.kind === "inventory" && <div className="snapshot-list">
+                    <strong>已保存月末快照</strong>
+                    <div>{inventorySnapshotMonths.map((month) => <span key={month}>{month}<button onClick={() => removeInventoryMonth(month)} aria-label={`删除 ${month} 库存`}>×</button></span>)}</div>
+                  </div>}
                   <small className={data.status === "ready" ? "parse-ok" : "parse-warning"}>{data.message}</small>
                 </>
               ) : <p className="empty-copy">支持 .xlsx、.xls、.csv；会自动寻找前25行中的表头并识别数量、SKU、国家和月份。</p>}
               <div className="upload-actions">
                 <input ref={(node) => { inputs.current[source.kind] = node; }} hidden type="file" accept=".xlsx,.xls,.csv" onChange={(event) => upload(source.kind, event)} />
-                <button className="primary small" disabled={busy !== null} onClick={() => inputs.current[source.kind]?.click()}>{busy === source.kind ? "正在解析…" : data ? "覆盖上传" : "选择文件"}</button>
+                <button className="primary small" disabled={busy !== null} onClick={() => inputs.current[source.kind]?.click()}>{busy === source.kind ? "正在解析…" : source.kind === "inventory" && data ? "追加月末快照" : data ? "覆盖上传" : "选择文件"}</button>
                 {data && <button className="danger-link" onClick={() => remove(source.kind)}>删除</button>}
               </div>
             </article>
