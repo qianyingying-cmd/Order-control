@@ -376,11 +376,19 @@ function nextMonths(start: string, count = 6) {
   });
 }
 
+function shiftMonth(month: string, offset: number) {
+  if (!month) return "";
+  const date = new Date(`${month}-01T00:00:00`);
+  date.setMonth(date.getMonth() + offset);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export default function DataHub({ view = "data" }: { view?: "data" | "analytics" | "sales" | "inventory" }) {
   const [datasets, setDatasets] = useState<Partial<Record<DataKind, Dataset>>>({});
   const [busy, setBusy] = useState<DataKind | null>(null);
   const [notice, setNotice] = useState("正在读取本机已保存的数据…");
   const [analysisMonth, setAnalysisMonth] = useState("");
+  const [salesStartMonth, setSalesStartMonth] = useState("");
   const [countryFilter, setCountryFilter] = useState("全部");
   const [categoryFilter, setCategoryFilter] = useState("全部");
   const [brandFilter, setBrandFilter] = useState("全部");
@@ -427,6 +435,10 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       : Boolean(sales?.details?.length && inventory?.details?.length);
   const availableMonths = Array.from(new Set((sales?.details ?? []).map((row) => row.month).filter(Boolean))).sort();
   const selectedMonth = analysisMonth || availableMonths.at(-1) || "";
+  const salesRangeEnd = selectedMonth;
+  const defaultSalesStart = availableMonths.filter((month) => month <= salesRangeEnd).slice(-12).at(0) ?? salesRangeEnd;
+  const salesRangeStart = salesStartMonth && salesStartMonth <= salesRangeEnd ? salesStartMonth : defaultSalesStart;
+  const salesRangeMonths = availableMonths.filter((month) => month >= salesRangeStart && month <= salesRangeEnd);
   const recentAnalysisMonths = selectedMonth ? availableMonths.filter((month) => month <= selectedMonth).slice(-3) : [];
   const latestInventoryMonth = Array.from(new Set((inventory?.details ?? []).map((row) => row.month).filter(Boolean))).sort().at(-1) ?? "";
   const filterCountries = Array.from(new Set([...(sales?.details ?? []), ...(inventory?.details ?? [])].map((row) => row.country).filter(Boolean))).sort();
@@ -446,19 +458,27 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
     (smallCategoryFilter === "全部" || row.smallCategory === smallCategoryFilter) &&
     (seriesFilter === "全部" || row.series === seriesFilter)
   );
-  const salesCurrentRows = salesDashboardRows.filter((row) => row.month === selectedMonth);
+  const salesCurrentRows = salesDashboardRows.filter((row) =>
+    view === "sales" ? salesRangeMonths.includes(row.month) : row.month === selectedMonth
+  );
   const salesRevenue = salesCurrentRows.reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
   const salesTicketAmount = salesCurrentRows.reduce((sum, row) => sum + (row.amount ?? 0), 0);
   const salesQuantity = salesCurrentRows.reduce((sum, row) => sum + row.quantity, 0);
-  const previousMonth = availableMonths.filter((month) => month < selectedMonth).at(-1) ?? "";
-  const previousRevenue = salesDashboardRows.filter((row) => row.month === previousMonth).reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
+  const periodLength = Math.max(salesRangeMonths.length, 1);
+  const previousMonth = view === "sales" ? shiftMonth(salesRangeStart, -1) : availableMonths.filter((month) => month < selectedMonth).at(-1) ?? "";
+  const previousPeriodStart = view === "sales" ? shiftMonth(salesRangeStart, -periodLength) : previousMonth;
+  const previousPeriodEnd = previousMonth;
+  const previousRevenue = salesDashboardRows
+    .filter((row) => row.month >= previousPeriodStart && row.month <= previousPeriodEnd)
+    .reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
   const revenueGrowth = previousRevenue ? salesRevenue / previousRevenue - 1 : 0;
-  const priorYearMonth = selectedMonth
-    ? `${Number(selectedMonth.slice(0, 4)) - 1}-${selectedMonth.slice(5, 7)}`
-    : "";
-  const priorYearRevenue = salesDashboardRows.filter((row) => row.month === priorYearMonth).reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
+  const priorYearStart = shiftMonth(view === "sales" ? salesRangeStart : selectedMonth, -12);
+  const priorYearMonth = shiftMonth(view === "sales" ? salesRangeEnd : selectedMonth, -12);
+  const priorYearRevenue = salesDashboardRows
+    .filter((row) => row.month >= priorYearStart && row.month <= priorYearMonth)
+    .reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0);
   const revenueYoY = priorYearRevenue ? salesRevenue / priorYearRevenue - 1 : 0;
-  const salesMonthlyRevenue = availableMonths.slice(-12).map((month) => ({
+  const salesMonthlyRevenue = (view === "sales" ? salesRangeMonths : availableMonths.slice(-12)).map((month) => ({
     name: month,
     value: salesDashboardRows.filter((row) => row.month === month).reduce((sum, row) => sum + (row.revenue ?? row.amount ?? 0), 0) / 10000,
   }));
@@ -659,7 +679,10 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <div className="local-badge"><i /> 同一设备自动记住</div>
         </div>
         <div className="analytics-filterbar">
-          <label>分析月份<select value={selectedMonth} onChange={(event) => setAnalysisMonth(event.target.value)}><option value="">最新月份</option>{availableMonths.map((month) => <option key={month}>{month}</option>)}</select></label>
+          {view === "sales" ? <>
+            <label>开始月份<select value={salesRangeStart} onChange={(event) => setSalesStartMonth(event.target.value)}>{availableMonths.filter((month) => month <= salesRangeEnd).map((month) => <option key={month}>{month}</option>)}</select></label>
+            <label>结束月份<select value={salesRangeEnd} onChange={(event) => setAnalysisMonth(event.target.value)}>{availableMonths.filter((month) => month >= salesRangeStart).map((month) => <option key={month}>{month}</option>)}</select></label>
+          </> : <label>分析月份<select value={selectedMonth} onChange={(event) => setAnalysisMonth(event.target.value)}><option value="">最新月份</option>{availableMonths.map((month) => <option key={month}>{month}</option>)}</select></label>}
           <label>销售类型<select value={salesSourceFilter} onChange={(event) => setSalesSourceFilter(event.target.value)}><option>全部销售</option><option>零售</option><option>批发</option></select></label>
           <label>品牌<select value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)}><option>全部</option>{filterBrands.map((brand) => <option key={brand}>{brand}</option>)}</select></label>
           <label>国家<select value={countryFilter} onChange={(event) => setCountryFilter(event.target.value)}><option>全部</option>{filterCountries.map((country) => <option key={country}>{country}</option>)}</select></label>
@@ -675,11 +698,11 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         {!detailReady && <div className="detail-upgrade-note"><strong>需要重新上传销售与库存文件</strong><span>旧版只保存总量汇总；新版上传后会保留SKU、国家、品类、渠道和月份维度，才能生成细颗粒度分析。</span></div>}
         <div className="summary-grid analytics-kpis">
           {view !== "inventory" && <>
-          <article><span>当月销售流水</span><strong>{detailReady ? fmt(salesRevenue / 10000, 1) : "—"} <em>万元</em></strong><small>{selectedMonth || "等待销售月份"} · RMB实际销售额</small></article>
-          <article><span>流水环比</span><strong className={revenueGrowth < 0 ? "red" : ""}>{detailReady && previousRevenue ? `${revenueGrowth >= 0 ? "+" : ""}${(revenueGrowth * 100).toFixed(1)}%` : "—"}</strong><small>对比 {previousMonth || "上月"}</small></article>
-          <article><span>流水同比</span><strong className={revenueYoY < 0 ? "red" : ""}>{detailReady && priorYearRevenue ? `${revenueYoY >= 0 ? "+" : ""}${(revenueYoY * 100).toFixed(1)}%` : "—"}</strong><small>{priorYearRevenue ? `对比 ${priorYearMonth}` : "无去年同期数据"}</small></article>
-          <article><span>当月销售吊牌金额</span><strong>{detailReady ? fmt(salesTicketAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
-          <article><span>当月销量</span><strong>{detailReady ? fmt(salesQuantity) : "—"} <em>件</em></strong><small>{salesSourceFilter}</small></article>
+          <article><span>{view === "sales" ? "区间销售流水" : "当月销售流水"}</span><strong>{detailReady ? fmt(salesRevenue / 10000, 1) : "—"} <em>万元</em></strong><small>{view === "sales" ? `${salesRangeStart} 至 ${salesRangeEnd}` : selectedMonth || "等待销售月份"} · RMB实际销售额</small></article>
+          <article><span>{view === "sales" ? "较上一区间" : "流水环比"}</span><strong className={revenueGrowth < 0 ? "red" : ""}>{detailReady && previousRevenue ? `${revenueGrowth >= 0 ? "+" : ""}${(revenueGrowth * 100).toFixed(1)}%` : "—"}</strong><small>{view === "sales" ? `对比 ${previousPeriodStart} 至 ${previousPeriodEnd}` : `对比 ${previousMonth || "上月"}`}</small></article>
+          <article><span>流水同比</span><strong className={revenueYoY < 0 ? "red" : ""}>{detailReady && priorYearRevenue ? `${revenueYoY >= 0 ? "+" : ""}${(revenueYoY * 100).toFixed(1)}%` : "—"}</strong><small>{priorYearRevenue ? `对比 ${priorYearStart}${view === "sales" && priorYearStart !== priorYearMonth ? ` 至 ${priorYearMonth}` : ""}` : "无去年同期数据"}</small></article>
+          <article><span>{view === "sales" ? "区间销售吊牌金额" : "当月销售吊牌金额"}</span><strong>{detailReady ? fmt(salesTicketAmount / 10000, 1) : "—"} <em>万元</em></strong><small>RMB吊牌口径</small></article>
+          <article><span>{view === "sales" ? "区间销量" : "当月销量"}</span><strong>{detailReady ? fmt(salesQuantity) : "—"} <em>件</em></strong><small>{salesSourceFilter}</small></article>
           </>}
           {view !== "sales" && <>
           <article><span>期末库存</span><strong>{detailReady ? fmt(analyticStock) : "—"} <em>件</em></strong><small>{latestInventoryMonth || "等待库存月份"}</small></article>
