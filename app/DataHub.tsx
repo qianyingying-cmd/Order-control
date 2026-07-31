@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
-type DataKind = "sales" | "wholesale" | "inventory" | "oih";
+type DataKind = "sales" | "wholesale" | "inventory" | "oihWilson" | "oihSalomon" | "order";
 type Row = Record<string, unknown>;
 type DetailRecord = {
   month: string;
@@ -57,13 +57,16 @@ const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
 const DATA_SCHEMA_VERSION = 9;
 const SALES_SCHEMA_VERSION = 10;
-const OIH_SCHEMA_VERSION = 11;
+const OIH_SCHEMA_VERSION = 12;
+const ORDER_SCHEMA_VERSION = 1;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
   { kind: "wholesale", title: "批发销售", subtitle: "观远批发 / 客户销售", accent: "blue" },
   { kind: "inventory", title: "月末库存", subtitle: "BI 库存余额 / M01", accent: "green" },
-  { kind: "oih", title: "OIH / 订单", subtitle: "在途、已下单及 VBR8", accent: "amber" },
+  { kind: "oihWilson", title: "Wilson OIH", subtitle: "已下单、尚未到货 · 仅保留最新版", accent: "amber" },
+  { kind: "oihSalomon", title: "SALOMON OIH", subtitle: "已下单、尚未到货 · 仅保留最新版", accent: "amber" },
+  { kind: "order", title: "本次拟下订单", subtitle: "尚未下单 · 按需上传并单独模拟", accent: "purple" },
 ];
 
 const aliases = {
@@ -99,8 +102,12 @@ function isSalesKind(kind: DataKind) {
   return kind === "sales" || kind === "wholesale";
 }
 
+function isOihKind(kind: DataKind) {
+  return kind === "oihWilson" || kind === "oihSalomon";
+}
+
 function schemaVersionFor(kind: DataKind) {
-  return isSalesKind(kind) ? SALES_SCHEMA_VERSION : kind === "oih" ? OIH_SCHEMA_VERSION : DATA_SCHEMA_VERSION;
+  return isSalesKind(kind) ? SALES_SCHEMA_VERSION : isOihKind(kind) ? OIH_SCHEMA_VERSION : kind === "order" ? ORDER_SCHEMA_VERSION : DATA_SCHEMA_VERSION;
 }
 
 function normalizeBrand(value: unknown) {
@@ -238,28 +245,30 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   });
 
   if (!best) throw new Error("工作簿中没有可读取的数据");
+  const selected = best as { sheetName: string; rows: Row[]; headers: string[]; score: number };
   const quantityOptions = kind === "sales" ? aliases.sales : kind === "wholesale" ? aliases.wholesale : kind === "inventory" ? aliases.inventory : aliases.oih;
-  const quantityHeader = findQuantityHeader(best.headers, quantityOptions);
+  const quantityHeader = findQuantityHeader(selected.headers, quantityOptions);
   const valueOptions = kind === "sales" ? aliases.salesValue : kind === "wholesale" ? aliases.wholesaleValue : kind === "inventory" ? aliases.inventoryValue : aliases.oihValue;
-  const valueHeader = findHeader(best.headers, valueOptions);
+  const valueHeader = findHeader(selected.headers, valueOptions);
   const revenueOptions = kind === "wholesale" ? aliases.wholesaleRevenue : aliases.salesRevenue;
-  const revenueHeader = isSalesKind(kind) ? findHeader(best.headers, revenueOptions) : undefined;
-  const skuHeader = findHeader(best.headers, aliases.sku);
-  const countryHeader = findHeader(best.headers, aliases.country);
-  const dateHeader = findHeader(best.headers, aliases.date);
-  const nameHeader = findHeader(best.headers, aliases.name);
-  const brandHeader = findHeader(best.headers, aliases.brand);
-  const categoryHeader = findHeader(best.headers, aliases.category);
-  const middleCategoryHeader = findHeader(best.headers, aliases.middleCategory);
-  const smallCategoryHeader = findHeader(best.headers, aliases.smallCategory);
-  const seriesHeader = findHeader(best.headers, aliases.series);
-  const channelHeader = findHeader(best.headers, aliases.channel);
-  const storeTypeHeader = findHeader(best.headers, aliases.storeType);
-  const onlinePlatformHeader = findHeader(best.headers, aliases.onlinePlatform);
-  const oihNetValueHeader = kind === "oih" ? findHeader(best.headers, aliases.oihNetValue) : undefined;
-  const oihBillingMonthHeader = kind === "oih" ? findHeader(best.headers, aliases.oihBillingMonth) : undefined;
-  const oihCrdHeader = kind === "oih" ? findHeader(best.headers, aliases.oihCrd) : undefined;
-  const currencyHeader = kind === "oih" ? findHeader(best.headers, aliases.currency) : undefined;
+  const revenueHeader = isSalesKind(kind) ? findHeader(selected.headers, revenueOptions) : undefined;
+  const skuHeader = findHeader(selected.headers, aliases.sku);
+  const countryHeader = findHeader(selected.headers, aliases.country);
+  const dateHeader = findHeader(selected.headers, aliases.date);
+  const nameHeader = findHeader(selected.headers, aliases.name);
+  const brandHeader = findHeader(selected.headers, aliases.brand);
+  const categoryHeader = findHeader(selected.headers, aliases.category);
+  const middleCategoryHeader = findHeader(selected.headers, aliases.middleCategory);
+  const smallCategoryHeader = findHeader(selected.headers, aliases.smallCategory);
+  const seriesHeader = findHeader(selected.headers, aliases.series);
+  const channelHeader = findHeader(selected.headers, aliases.channel);
+  const storeTypeHeader = findHeader(selected.headers, aliases.storeType);
+  const onlinePlatformHeader = findHeader(selected.headers, aliases.onlinePlatform);
+  const isArrivalFile = isOihKind(kind) || kind === "order";
+  const oihNetValueHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihNetValue) : undefined;
+  const oihBillingMonthHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihBillingMonth) : undefined;
+  const oihCrdHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihCrd) : undefined;
+  const currencyHeader = isArrivalFile ? findHeader(selected.headers, aliases.currency) : undefined;
   const monthly: Record<string, number> = {};
   const sku: Record<string, number> = {};
   const countries: Record<string, number> = {};
@@ -270,7 +279,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   let netValue = 0;
   const statusCounts: Record<string, number> = {};
 
-  best.rows.forEach((row) => {
+  selected.rows.forEach((row) => {
     const rowCountry = normalizeCountry(countryHeader ? row[countryHeader] : "");
     const rowStoreType = storeTypeHeader ? String(row[storeTypeHeader] ?? "").trim() : "";
     const rowOnlinePlatform = onlinePlatformHeader ? String(row[onlinePlatformHeader] ?? "").trim() : "";
@@ -285,7 +294,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const rowNetValue = oihNetValueHeader ? numeric(row[oihNetValueHeader]) : 0;
     const billingMonth = oihBillingMonthHeader ? String(row[oihBillingMonthHeader] ?? "").trim() : "";
     const crd = oihCrdHeader ? row[oihCrdHeader] : "";
-    const oihStatus: DetailRecord["oihStatus"] = kind === "oih"
+    const oihStatus: DetailRecord["oihStatus"] = isOihKind(kind)
       ? (/RISK/i.test(billingMonth) || (!dateHeader || !row[dateHeader]) && !crd
           ? "风险订单"
           : /UC/i.test(billingMonth) || !dateHeader || !row[dateHeader]
@@ -304,7 +313,13 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const skuValue = skuHeader ? String(row[skuHeader] ?? "").trim() : "";
     const country = rowCountry;
     const name = nameHeader ? String(row[nameHeader] ?? "").trim() : "";
-    const brand = brandHeader ? normalizeBrand(row[brandHeader]) : kind === "oih" ? "WILSON" : "";
+    const brand = brandHeader
+      ? normalizeBrand(row[brandHeader])
+      : kind === "oihWilson"
+        ? "WILSON"
+        : kind === "oihSalomon"
+          ? "SALOMON"
+          : "";
     const category = categoryHeader ? String(row[categoryHeader] ?? "").trim() : "";
     const middleCategory = middleCategoryHeader ? String(row[middleCategoryHeader] ?? "").trim() : "";
     const smallCategory = smallCategoryHeader ? String(row[smallCategoryHeader] ?? "").trim() : "";
@@ -340,14 +355,16 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     kind,
     fileName,
     uploadedAt: new Date().toISOString(),
-    rowCount: best.rows.filter((row) => Object.values(row).some((value) => String(value).trim())).length,
-    sheetName: best.sheetName,
-    headers: best.headers,
+    rowCount: selected.rows.filter((row) => Object.values(row).some((value) => String(value).trim())).length,
+    sheetName: selected.sheetName,
+    headers: selected.headers,
     status: missing.length ? "mapping" : "ready",
     message: missing.length
       ? `已保存，但未识别：${missing.join("、")}`
-      : kind === "oih"
-        ? `已读取主表 ${best.sheetName}；按预计到仓月份滚动，UC与RISK单独标记`
+      : isOihKind(kind)
+        ? `已读取主表 ${selected.sheetName}；按预计到仓月份滚动，UC与RISK单独标记`
+        : kind === "order"
+          ? `已保存本次拟下订单；仅用于审核模拟，不计入现有OIH`
         : !skuHeader && isSalesKind(kind)
           ? `${kind === "wholesale" ? "批发" : "零售"}底稿无SKU，将按品牌、品类、国家和月份分析`
           : "字段已自动识别，可用于滚动分析",
@@ -409,6 +426,48 @@ function mergeSalesSources(retail?: Dataset, wholesale?: Dataset): Dataset | und
     sku,
     countries,
     details: sources.flatMap((source) => source.details ?? []),
+  };
+}
+
+function mergeOihSources(wilson?: Dataset, salomon?: Dataset): Dataset | undefined {
+  const sources = [wilson, salomon].filter(Boolean) as Dataset[];
+  if (!sources.length) return undefined;
+  const monthly: Record<string, number> = {};
+  const sku: Record<string, number> = {};
+  const countries: Record<string, number> = {};
+  sources.forEach((source) => {
+    Object.entries(source.monthly).forEach(([key, value]) => add(monthly, key, value));
+    Object.entries(source.sku).forEach(([key, value]) => add(sku, key, value));
+    Object.entries(source.countries).forEach(([key, value]) => add(countries, key, value));
+  });
+  const details = sources.flatMap((source) => source.details ?? []);
+  const statusCounts: Record<string, number> = {};
+  sources.forEach((source) => Object.entries(source.summary.statusCounts ?? {}).forEach(([key, value]) => add(statusCounts, key, value)));
+  return {
+    schemaVersion: OIH_SCHEMA_VERSION,
+    kind: "oihWilson",
+    fileName: sources.map((source) => source.fileName).join(" + "),
+    uploadedAt: sources.map((source) => source.uploadedAt).sort().at(-1) ?? "",
+    rowCount: sources.reduce((sum, source) => sum + source.rowCount, 0),
+    sheetName: "Wilson + SALOMON",
+    headers: Array.from(new Set(sources.flatMap((source) => source.headers))),
+    status: sources.every((source) => source.status === "ready") ? "ready" : "mapping",
+    message: `已合并 ${wilson ? "Wilson" : ""}${wilson && salomon ? " + " : ""}${salomon ? "SALOMON" : ""} 最新OIH`,
+    summary: {
+      quantity: sources.reduce((sum, source) => sum + source.summary.quantity, 0),
+      amount: sources.reduce((sum, source) => sum + (source.summary.amount ?? 0), 0),
+      netValue: sources.reduce((sum, source) => sum + (source.summary.netValue ?? 0), 0),
+      statusCounts,
+      skuCount: Object.keys(sku).length,
+      monthCount: Object.keys(monthly).length,
+      countryCount: Object.keys(countries).length,
+      latestMonth: Object.keys(monthly).sort().at(-1) ?? "",
+      detectedDateField: sources.map((source) => source.summary.detectedDateField).filter(Boolean).join(" / "),
+    },
+    monthly,
+    sku,
+    countries,
+    details,
   };
 }
 
@@ -499,8 +558,8 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         if (expiredRows.length) await Promise.all(expiredRows.map((row) => deleteOne(row.kind)));
         setDatasets(Object.fromEntries(validRows.map((row) => [row.kind, row])));
         setNotice(expiredRows.length
-          ? expiredKinds.has("oih")
-            ? "OIH识别口径已更新：请重新上传Wilson OIH；现有销售与库存已保留"
+          ? expiredKinds.has("oihWilson") || expiredKinds.has("oihSalomon")
+            ? "OIH识别口径已更新：请分别上传最新的 Wilson 与 SALOMON OIH；现有销售与库存已保留"
             : "旧版销售渠道口径已自动清除：请重新上传 R01 和批发销售；库存与 OIH 已保留"
           : validRows.length ? `已恢复 ${validRows.length} 类数据，无需再次上传` : "尚未上传真实数据，可从三个数据源开始");
       })
@@ -509,7 +568,8 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
 
   const sales = useMemo(() => mergeSalesSources(datasets.sales, datasets.wholesale), [datasets.sales, datasets.wholesale]);
   const inventory = datasets.inventory;
-  const oih = datasets.oih;
+  const oih = useMemo(() => mergeOihSources(datasets.oihWilson, datasets.oihSalomon), [datasets.oihWilson, datasets.oihSalomon]);
+  const proposedOrder = datasets.order;
   const salesMonths = Object.entries(sales?.monthly ?? {}).sort(([a], [b]) => a.localeCompare(b));
   const recentSales = salesMonths.slice(-3);
   const monthlyVelocity = recentSales.length ? recentSales.reduce((sum, [, value]) => sum + value, 0) / recentSales.length : 0;
@@ -722,6 +782,10 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       setDatasets((current) => ({ ...current, [kind]: saved }));
       setNotice(kind === "inventory"
         ? `${file.name} 已按月份追加；相同月份已自动覆盖`
+        : isOihKind(kind)
+          ? `${file.name} 已保存为该品牌最新OIH；旧版已自动覆盖`
+          : kind === "order"
+            ? `${file.name} 已保存为本次拟下订单；不会并入现有OIH`
         : `${file.name} 已保存；下次打开会自动恢复`);
     } catch (error) {
       setNotice(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请检查文件格式");
@@ -955,9 +1019,9 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
                 <>
                   <strong className="file-name">{data.fileName}</strong>
                   <p>{fmt(data.rowCount)} 行 · {data.sheetName} · {new Date(data.uploadedAt).toLocaleString("zh-CN")}</p>
-                  <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>{isSalesKind(source.kind) ? "流水" : source.kind === "oih" ? "USD净值" : "吊牌额"} <b>{source.kind === "oih" ? `$${fmt((data.summary.netValue ?? 0) / 10000, 1)}万` : `${fmt(((isSalesKind(source.kind) ? data.summary.revenue : data.summary.amount) ?? 0) / 10000, 1)}万`}</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
+                  <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>{isSalesKind(source.kind) ? "流水" : isOihKind(source.kind) || source.kind === "order" ? "USD净值" : "吊牌额"} <b>{isOihKind(source.kind) || source.kind === "order" ? `$${fmt((data.summary.netValue ?? 0) / 10000, 1)}万` : `${fmt(((isSalesKind(source.kind) ? data.summary.revenue : data.summary.amount) ?? 0) / 10000, 1)}万`}</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
                   <small className="detected-field">月份字段：{data.summary.detectedDateField || "未识别"}</small>
-                  {source.kind === "oih" && <div className="oih-status-strip">
+                  {isOihKind(source.kind) && <div className="oih-status-strip">
                     <span>确定到货 <b>{fmt(data.summary.statusCounts?.["确定到货"] ?? 0)}</b></span>
                     <span>待确认 <b>{fmt(data.summary.statusCounts?.["待确认"] ?? 0)}</b></span>
                     <span>风险 <b>{fmt(data.summary.statusCounts?.["风险订单"] ?? 0)}</b></span>
@@ -971,13 +1035,39 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
               ) : <p className="empty-copy">支持 .xlsx、.xls、.csv；会自动寻找前25行中的表头并识别数量、SKU、国家和月份。</p>}
               <div className="upload-actions">
                 <input ref={(node) => { inputs.current[source.kind] = node; }} hidden type="file" accept=".xlsx,.xls,.csv" onChange={(event) => upload(source.kind, event)} />
-                <button className="primary small" disabled={busy !== null} onClick={() => inputs.current[source.kind]?.click()}>{busy === source.kind ? "正在解析…" : source.kind === "inventory" && data ? "追加月末快照" : data ? "覆盖上传" : "选择文件"}</button>
+                <button className="primary small" disabled={busy !== null} onClick={() => inputs.current[source.kind]?.click()}>{busy === source.kind ? "正在解析…" : source.kind === "inventory" && data ? "追加月末快照" : isOihKind(source.kind) && data ? "上传最新版本" : source.kind === "order" && data ? "更换本次订单" : data ? "覆盖上传" : "选择文件"}</button>
                 {data && <button className="danger-link" onClick={() => remove(source.kind)}>删除</button>}
               </div>
             </article>
           );
         })}
       </div>
+
+      <section className="data-lifecycle">
+        <div>
+          <span>01 · 当前库存</span>
+          <strong>月末库存快照</strong>
+          <small>已经到货，作为滚动预测期初</small>
+        </div>
+        <i>+</i>
+        <div>
+          <span>02 · 已下单</span>
+          <strong>Wilson + SALOMON 最新OIH</strong>
+          <small>尚未到货，按预计到货月份进入库存</small>
+        </div>
+        <i>+</i>
+        <div className="scenario">
+          <span>03 · 尚未下单</span>
+          <strong>本次拟下订单</strong>
+          <small>仅进入“批准后”情景，不与OIH重复</small>
+        </div>
+        <i>−</i>
+        <div>
+          <span>04 · 未来销售</span>
+          <strong>滚动销售预测</strong>
+          <small>按月扣减，得到未来预计库存</small>
+        </div>
+      </section>
 
       <div className="summary-grid data-kpis">
         <article><span>库存吊牌金额</span><strong>{detailReady ? fmt(overviewInventoryAmount / 10000, 1) : "—"} <em>万元</em></strong><small>{overviewBrand} · RMB吊牌 · {latestInventoryMonth || "待上传"}</small></article>
@@ -1006,6 +1096,17 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           })}
         </div>
         {overviewOihRiskQty > 0 && <div className="rolling-alert"><b>风险口径</b><span>{fmt(overviewOihRiskQty)} 件缺少稳定到仓月份或属于 RISK-UC，暂不进入确定到货滚动。</span></div>}
+      </section>}
+
+      {proposedOrder && <section className="panel proposed-order-panel">
+        <div className="panel-title"><div><span className="step">拟下单</span><h3>本次订单审核输入</h3></div><span className="unit">尚未下单 · 不计入现有OIH</span></div>
+        <div className="oih-kpis">
+          <span>订单数量<strong>{fmt(proposedOrder.summary.quantity)} 件</strong></span>
+          <span>SKU数量<strong>{fmt(proposedOrder.summary.skuCount)} SKU</strong></span>
+          <span>拟到货月份<strong>{fmt(proposedOrder.summary.monthCount)} 个月</strong></span>
+          <span>订单净值<strong>${fmt((proposedOrder.summary.netValue ?? 0) / 10000, 1)} 万</strong></span>
+        </div>
+        <div className="scenario-note"><b>审核情景</b><span>不批准：库存 + 最新OIH − 预测销售；批准：库存 + 最新OIH + 本次订单 − 预测销售。两者差额即本次订单的库存与现金增量影响。</span></div>
       </section>}
 
       <div className="data-analysis-grid">

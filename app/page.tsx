@@ -38,7 +38,7 @@ const seedItems: StockItem[] = [
     paymentMonth: "2026-10",
     customerEvidence: true,
     status: "有条件通过",
-    reasons: ["虚拟示例：客户订单已锁定", "需确认不可取消条款与回款日期", "需核实OIH是否与本单重复"],
+    reasons: ["虚拟示例：客户订单已锁定", "需确认不可取消条款与回款日期", "本次订单尚未进入OIH，按增量影响审核"],
   },
   {
     sku: "DEMO-002",
@@ -70,7 +70,7 @@ const seedItems: StockItem[] = [
     paymentMonth: "2026-11",
     customerEvidence: false,
     status: "需调整",
-    reasons: ["虚拟示例：新品尚无零售销售", "已有OIH，本次订单可能造成叠加", "缺少门店首铺计划或客户锁单，建议暂缓"],
+    reasons: ["虚拟示例：新品尚无零售销售", "现有OIH到货后库存已偏高，本次订单将进一步增加库存", "缺少门店首铺计划或客户锁单，建议暂缓"],
   },
   {
     sku: "DEMO-004",
@@ -247,7 +247,7 @@ export default function Home() {
                 </div>
                 <ol>
                   <li className="positive"><b>可批准</b><span>{recommendedQty}支具备客户锁单或稳定动销依据，但其中客户锁单须补齐不可取消条款与回款日期。</span></li>
-                  <li className="negative"><b>需暂缓</b><span>{holdQty}支新品已有168支OIH且暂无销售，补充门店铺货计划或客户订单后再审。</span></li>
+                  <li className="negative"><b>需暂缓</b><span>{holdQty}支新品在现有OIH到货后仍缺少销售支撑，补充门店铺货计划或客户订单后再审。</span></li>
                   <li className="cash"><b>现金安排</b><span>付款集中在10月；本批金额尚可控，但应与其他到货付款合并检查月度额度后放行。</span></li>
                 </ol>
                 <div className="next-action"><strong>建议动作</strong><span>拆单审批：先释放{recommendedQty}支，冻结{holdQty}支，并将资料补充设为放行条件。</span></div>
@@ -393,7 +393,7 @@ export default function Home() {
               <section className="panel rule-panel">
                 <div className="panel-title"><div><span className="step">07</span><h3>本单适用规则</h3></div><button onClick={() => setActiveTab("rules")} className="text-button">查看全部规则 →</button></div>
                 <div className="rule-row"><span>订单类型优先</span><strong>{selected.orderType}</strong><i className="pass">已识别</i></div>
-                <div className="rule-row"><span>重复订单检查</span><strong>OIH + 本次订单</strong><i className={selected.oih > selected.orderQty ? "attention" : "pass"}>{selected.oih > selected.orderQty ? "需复核" : "正常"}</i></div>
+                <div className="rule-row"><span>增量口径检查</span><strong>现有OIH + 本次拟下订单</strong><i className="pass">无重复</i></div>
                 <div className="rule-row"><span>库存周数规则</span><strong>{weeksOfInventory(selected)?.toFixed(1) ?? "新品豁免"}</strong><i className="pass">规则公开</i></div>
                 <div className="rule-row"><span>客户证据</span><strong>{selected.customerEvidence ? "已提供" : "未提供"}</strong><i className={selected.customerEvidence ? "pass" : "attention"}>{selected.customerEvidence ? "通过" : "待补充"}</i></div>
               </section>
@@ -416,8 +416,8 @@ export default function Home() {
             <div className="summary-grid inventory-cards">
               <article><span>Wilson期末库存</span><strong>924,567</strong><small>2606月末实际</small></article>
               <article><span>人民币吊牌金额</span><strong>¥576.1m</strong><small>期末库存口径</small></article>
-              <article><span>BI表内在途</span><strong>示例数据</strong><small>需与OIH去重</small></article>
-              <article><span>重点风险</span><strong className="red">OIH叠加</strong><small>8–10月到货集中</small></article>
+              <article><span>最新OIH</span><strong>已下单未到货</strong><small>按预计到货月份滚动</small></article>
+              <article><span>重点风险</span><strong className="red">到货集中</strong><small>8–10月库存与付款承压</small></article>
             </div>
             <section className="panel inventory-table">
               <div className="panel-title"><div><h3>国家库存热力</h3></div><span className="unit">人民币吊牌</span></div>
@@ -444,7 +444,7 @@ export default function Home() {
                 ["常规补货", "使用最近13周销量；下单后库存周数超过20周触发黄色、超过26周触发红色。", "WOI > 26周 → 建议调整"],
                 ["新品首单", "使用门店数×首铺深度、上市波段和同系列历史表现；新品销量为零不直接否决。", "缺少铺货计划 → 建议调整"],
                 ["电商补货", "使用最近4–8周平台销量、活动计划及平台库存；活动订单必须对应营销日历。", "活动证据缺失 → 暂缓"],
-                ["国家仓备货", "使用国家总库存、OIH、预测准确率和跨国调拨能力；严查重复订单。", "OIH重复 → 红色预警"],
+                ["国家仓备货", "使用国家总库存、最新OIH、预测准确率和跨国调拨能力；本次订单按新增量模拟。", "批准后库存过高 → 红色预警"],
                 ["现金规则", "订单必须落到付款月份；单月超过预算10%或现金安全线时升级审批。", "突破安全线 → 财务否决"],
               ].map(([title, body, rule]) => (
                 <article className="rule-card" key={title}><span>{title}</span><p>{body}</p><strong>{rule}</strong></article>
