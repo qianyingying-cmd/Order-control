@@ -244,6 +244,19 @@ td small { display:block; color:#7d8994; font-size:9px; margin-top:4px; max-widt
 .snapshot-list > div { display:flex; flex-wrap:wrap; gap:5px; }
 .snapshot-list span { display:inline-flex; align-items:center; gap:4px; padding:4px 6px; border-radius:10px; background:#e2f1e8; color:#27533d; font-size:8px; font-weight:800; }
 .snapshot-list button { width:14px; height:14px; padding:0; border:0; border-radius:50%; background:#c5dfcf; color:#27533d; line-height:14px; cursor:pointer; }
+.oih-status-strip { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin:7px 0; }
+.oih-status-strip span { padding:5px 6px; border-radius:6px; background:#fff7e7; color:#7c5a17; font-size:8px; }
+.oih-status-strip b { display:block; margin-top:2px; color:#4f3b12; font-size:10px; }
+.oih-arrival-panel { margin-bottom:16px; }
+.oih-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; padding:14px 18px; }
+.oih-kpis span { padding:10px 12px; border:1px solid #eee2c8; border-radius:8px; background:#fffaf0; color:#776344; font-size:9px; }
+.oih-kpis strong { display:block; margin-top:5px; color:#173a55; font-size:15px; }
+.oih-month-list { display:grid; gap:9px; padding:2px 18px 16px; }
+.oih-month-list > div { display:grid; grid-template-columns:70px 1fr 190px; align-items:center; gap:12px; font-size:9px; }
+.oih-month-list i { display:flex; height:10px; overflow:hidden; border-radius:8px; background:#edf1f4; }
+.oih-month-list i b { height:100%; background:#238a60; }
+.oih-month-list i em { height:100%; background:#d69b2d; }
+.oih-month-list span { color:#5e7180; text-align:right; }
 .sales-trend-panel { margin-top:14px; }
 .sales-revenue-trend {
   min-height:210px;
