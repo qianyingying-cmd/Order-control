@@ -17,6 +17,9 @@ type DetailRecord = {
   series: string;
   channel: string;
   sourceType?: "零售" | "批发";
+  oihStatus?: "确定到货" | "待确认" | "风险订单";
+  currency?: string;
+  netValue?: number;
   quantity: number;
   amount: number;
   revenue: number;
@@ -36,6 +39,8 @@ type Dataset = {
     quantity: number;
     amount?: number;
     revenue?: number;
+    netValue?: number;
+    statusCounts?: Record<string, number>;
     skuCount: number;
     monthCount: number;
     countryCount: number;
@@ -52,6 +57,7 @@ const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
 const DATA_SCHEMA_VERSION = 9;
 const SALES_SCHEMA_VERSION = 10;
+const OIH_SCHEMA_VERSION = 11;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
@@ -61,28 +67,32 @@ const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: st
 ];
 
 const aliases = {
-  sku: ["sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
-  country: ["BI合并公司", "国家", "市场", "区域", "country", "market"],
-  name: ["商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
+  sku: ["Material[VBAP]", "sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
+  country: ["Ship-to Cust", "BI合并公司", "国家", "市场", "区域", "country", "market"],
+  name: ["Description[VBAP]", "商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
   brand: ["渠道品牌描述", "品牌", "品牌名称", "brand"],
-  category: ["大类", "一级品类", "商品大类", "categoryl1", "category1"],
-  middleCategory: ["中类", "二级品类", "商品中类", "categoryl2", "category2"],
-  smallCategory: ["小类", "三级品类", "商品小类", "categoryl3", "category3", "品类"],
-  series: ["系列", "商品系列", "产品系列", "series"],
+  category: ["SBU", "大类", "一级品类", "商品大类", "categoryl1", "category1"],
+  middleCategory: ["PH3", "中类", "二级品类", "商品中类", "categoryl2", "category2"],
+  smallCategory: ["PH4", "小类", "三级品类", "商品小类", "categoryl3", "category3", "品类"],
+  series: ["PH6", "系列", "商品系列", "产品系列", "series"],
   channel: ["渠道", "销售渠道", "店铺", "门店", "客户", "channel", "store"],
   storeType: ["经营类型", "门店类型", "店铺类型", "经营性质", "storetype"],
   onlinePlatform: ["一级平台（线上）", "一级平台线上", "线上平台", "电商平台", "平台"],
-  date: ["单据/出库/收货月份", "单据出库收货月份", "单据月份", "出库月份", "收货月份", "日历月份", "库存日期", "单据日期", "出库日期", "收货日期", "过账日期", "销售日期", "库存月份", "快照日期", "日期", "月份", "年月", "date", "month"],
+  date: ["Est In DC", "单据/出库/收货月份", "单据出库收货月份", "单据月份", "出库月份", "收货月份", "日历月份", "库存日期", "单据日期", "出库日期", "收货日期", "过账日期", "销售日期", "库存月份", "快照日期", "日期", "月份", "年月", "date", "month"],
   sales: ["本期零售数量", "零售数量", "销售数量", "销量", "净销售数量", "销售件数", "数量", "qty", "quantity"],
   wholesale: ["本期批发数量", "批发数量", "批发销售数量", "出库数量", "发货数量", "销售数量", "销量", "数量", "qty", "quantity"],
   inventory: ["本期_期末库存数量", "本期期末库存数量", "期末库存数量", "库存数量", "可用库存", "数量", "qty", "quantity"],
-  oih: ["oih", "在途数量", "订单数量", "下单数量", "未到货数量", "open order", "数量", "qty", "quantity"],
+  oih: ["Order Qty", "oih", "在途数量", "订单数量", "下单数量", "未到货数量", "open order", "数量", "qty", "quantity"],
   salesValue: ["本期吊牌金额-人民币", "本期吊牌金额人民币", "吊牌销售金额", "销售吊牌金额", "零售吊牌金额", "吊牌金额", "retailvalue"],
   wholesaleValue: ["本期批发吊牌金额-人民币", "批发吊牌金额", "批发销售吊牌金额", "出库吊牌金额", "发货吊牌金额", "本期吊牌金额-人民币", "吊牌金额", "销售金额"],
   salesRevenue: ["本期零售金额-人民币", "本期零售金额人民币", "零售金额-人民币", "实际销售金额", "实收金额", "流水金额", "零售金额"],
   wholesaleRevenue: ["本期批发金额-人民币", "批发金额-人民币", "批发销售金额", "出库金额-人民币", "销售金额-人民币", "实际销售金额", "流水金额", "销售金额"],
   inventoryValue: ["本期_期末库存人民币吊牌金额", "本期期末库存人民币吊牌金额", "库存人民币吊牌金额", "期末库存人民币吊牌金额", "库存吊牌金额", "期末库存吊牌金额", "stockvalue"],
   oihValue: ["oih吊牌金额", "订单吊牌金额", "在途吊牌金额", "吊牌金额", "订单金额"],
+  oihNetValue: ["Net value[", "Net value", "订单净值"],
+  oihBillingMonth: ["Est.Billing Mth", "预计开票月份"],
+  oihCrd: ["PO CRD", "CRD"],
+  currency: ["Curr.", "Currency", "币种"],
 };
 
 function isSalesKind(kind: DataKind) {
@@ -90,7 +100,7 @@ function isSalesKind(kind: DataKind) {
 }
 
 function schemaVersionFor(kind: DataKind) {
-  return isSalesKind(kind) ? SALES_SCHEMA_VERSION : DATA_SCHEMA_VERSION;
+  return isSalesKind(kind) ? SALES_SCHEMA_VERSION : kind === "oih" ? OIH_SCHEMA_VERSION : DATA_SCHEMA_VERSION;
 }
 
 function normalizeBrand(value: unknown) {
@@ -107,6 +117,13 @@ function normalizeBrand(value: unknown) {
 
 function normalizeCountry(value: unknown) {
   const raw = String(value ?? "").trim();
+  if (/^AVID-VN/i.test(raw)) return "越南";
+  if (/^AVID-MY$/i.test(raw)) return "马来西亚";
+  if (/^AVID-TH$/i.test(raw)) return "泰国";
+  if (/^AVID-PH$/i.test(raw)) return "菲律宾";
+  if (/^AVID-ID$/i.test(raw)) return "印尼";
+  if (/^AVID-SG$/i.test(raw)) return "新加坡";
+  if (/^SUKRT$/i.test(raw)) return "印度";
   if (/^(马来|马来西亚|malaysia)$/i.test(raw)) return "马来西亚";
   return raw;
 }
@@ -239,6 +256,10 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const channelHeader = findHeader(best.headers, aliases.channel);
   const storeTypeHeader = findHeader(best.headers, aliases.storeType);
   const onlinePlatformHeader = findHeader(best.headers, aliases.onlinePlatform);
+  const oihNetValueHeader = kind === "oih" ? findHeader(best.headers, aliases.oihNetValue) : undefined;
+  const oihBillingMonthHeader = kind === "oih" ? findHeader(best.headers, aliases.oihBillingMonth) : undefined;
+  const oihCrdHeader = kind === "oih" ? findHeader(best.headers, aliases.oihCrd) : undefined;
+  const currencyHeader = kind === "oih" ? findHeader(best.headers, aliases.currency) : undefined;
   const monthly: Record<string, number> = {};
   const sku: Record<string, number> = {};
   const countries: Record<string, number> = {};
@@ -246,6 +267,8 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   let quantity = 0;
   let amount = 0;
   let revenue = 0;
+  let netValue = 0;
+  const statusCounts: Record<string, number> = {};
 
   best.rows.forEach((row) => {
     const rowCountry = normalizeCountry(countryHeader ? row[countryHeader] : "");
@@ -259,9 +282,21 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const qty = quantityHeader ? numeric(row[quantityHeader]) : 0;
     const rowAmount = valueHeader ? numeric(row[valueHeader]) : 0;
     const rowRevenue = revenueHeader ? numeric(row[revenueHeader]) : rowAmount;
+    const rowNetValue = oihNetValueHeader ? numeric(row[oihNetValueHeader]) : 0;
+    const billingMonth = oihBillingMonthHeader ? String(row[oihBillingMonthHeader] ?? "").trim() : "";
+    const crd = oihCrdHeader ? row[oihCrdHeader] : "";
+    const oihStatus: DetailRecord["oihStatus"] = kind === "oih"
+      ? (/RISK/i.test(billingMonth) || (!dateHeader || !row[dateHeader]) && !crd
+          ? "风险订单"
+          : /UC/i.test(billingMonth) || !dateHeader || !row[dateHeader]
+            ? "待确认"
+            : "确定到货")
+      : undefined;
     quantity += qty;
     amount += rowAmount;
     revenue += rowRevenue;
+    netValue += rowNetValue;
+    if (oihStatus) statusCounts[oihStatus] = (statusCounts[oihStatus] ?? 0) + qty;
     add(sku, skuHeader ? String(row[skuHeader] ?? "").trim() : "", qty);
     add(countries, rowCountry, qty);
     add(monthly, dateHeader ? monthOf(row[dateHeader]) : "", qty);
@@ -269,7 +304,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const skuValue = skuHeader ? String(row[skuHeader] ?? "").trim() : "";
     const country = rowCountry;
     const name = nameHeader ? String(row[nameHeader] ?? "").trim() : "";
-    const brand = brandHeader ? normalizeBrand(row[brandHeader]) : "";
+    const brand = brandHeader ? normalizeBrand(row[brandHeader]) : kind === "oih" ? "WILSON" : "";
     const category = categoryHeader ? String(row[categoryHeader] ?? "").trim() : "";
     const middleCategory = middleCategoryHeader ? String(row[middleCategoryHeader] ?? "").trim() : "";
     const smallCategory = smallCategoryHeader ? String(row[smallCategoryHeader] ?? "").trim() : "";
@@ -284,12 +319,13 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
               ? "自营"
               : "联营")
         : rawChannel;
+    const currency = currencyHeader ? String(row[currencyHeader] ?? "").trim() : "";
     const analysisSku = skuValue || (isSalesKind(kind) ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
     if (analysisSku) {
-      const key = [month, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel].join("¦");
+      const key = [month, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel, oihStatus].join("¦");
       const current = detailMap.get(key);
-      if (current) { current.quantity += qty; current.amount += rowAmount; current.revenue += rowRevenue; }
-      else detailMap.set(key, { month, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, sourceType: kind === "wholesale" ? "批发" : kind === "sales" ? "零售" : undefined, quantity: qty, amount: rowAmount, revenue: rowRevenue });
+      if (current) { current.quantity += qty; current.amount += rowAmount; current.revenue += rowRevenue; current.netValue = (current.netValue ?? 0) + rowNetValue; }
+      else detailMap.set(key, { month, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, sourceType: kind === "wholesale" ? "批发" : kind === "sales" ? "零售" : undefined, oihStatus, currency, netValue: rowNetValue, quantity: qty, amount: rowAmount, revenue: rowRevenue });
     }
   });
   const months = Object.keys(monthly).sort();
@@ -308,11 +344,19 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     sheetName: best.sheetName,
     headers: best.headers,
     status: missing.length ? "mapping" : "ready",
-    message: missing.length ? `已保存，但未识别：${missing.join("、")}` : !skuHeader && isSalesKind(kind) ? `${kind === "wholesale" ? "批发" : "零售"}底稿无SKU，将按品牌、品类、国家和月份分析` : "字段已自动识别，可用于滚动分析",
+    message: missing.length
+      ? `已保存，但未识别：${missing.join("、")}`
+      : kind === "oih"
+        ? `已读取主表 ${best.sheetName}；按预计到仓月份滚动，UC与RISK单独标记`
+        : !skuHeader && isSalesKind(kind)
+          ? `${kind === "wholesale" ? "批发" : "零售"}底稿无SKU，将按品牌、品类、国家和月份分析`
+          : "字段已自动识别，可用于滚动分析",
     summary: {
       quantity,
       amount,
       revenue,
+      netValue,
+      statusCounts,
       skuCount: Object.keys(sku).length,
       monthCount: months.length,
       countryCount: Object.keys(countries).length,
@@ -451,10 +495,13 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       .then(async (rows) => {
         const validRows = rows.filter((row) => row.schemaVersion === schemaVersionFor(row.kind));
         const expiredRows = rows.filter((row) => row.schemaVersion !== schemaVersionFor(row.kind));
+        const expiredKinds = new Set(expiredRows.map((row) => row.kind));
         if (expiredRows.length) await Promise.all(expiredRows.map((row) => deleteOne(row.kind)));
         setDatasets(Object.fromEntries(validRows.map((row) => [row.kind, row])));
         setNotice(expiredRows.length
-          ? "旧版销售渠道口径已自动清除：请重新上传 R01 和批发销售；库存与 OIH 已保留"
+          ? expiredKinds.has("oih")
+            ? "OIH识别口径已更新：请重新上传Wilson OIH；现有销售与库存已保留"
+            : "旧版销售渠道口径已自动清除：请重新上传 R01 和批发销售；库存与 OIH 已保留"
           : validRows.length ? `已恢复 ${validRows.length} 类数据，无需再次上传` : "尚未上传真实数据，可从三个数据源开始");
       })
       .catch(() => setNotice("浏览器存储不可用，请检查隐私模式或网站存储权限"));
@@ -544,6 +591,15 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const overviewInventoryRows = (inventory?.details ?? []).filter((row) => overviewMatches(row) && (!latestInventoryMonth || !row.month || row.month === latestInventoryMonth));
   const overviewSalesRows = (sales?.details ?? []).filter(overviewMatches);
   const overviewOihRows = (oih?.details ?? []).filter(overviewMatches);
+  const overviewOihConfirmedRows = overviewOihRows.filter((row) => row.oihStatus === "确定到货");
+  const overviewOihPendingRows = overviewOihRows.filter((row) => row.oihStatus === "待确认");
+  const overviewOihRiskRows = overviewOihRows.filter((row) => row.oihStatus === "风险订单");
+  const oihArrivalMonths = Array.from(new Set(overviewOihRows.map((row) => row.month).filter(Boolean))).sort();
+  const oihMonthlyArrivals = oihArrivalMonths.map((month) => ({
+    month,
+    confirmed: overviewOihConfirmedRows.filter((row) => row.month === month).reduce((sum, row) => sum + row.quantity, 0),
+    pending: overviewOihPendingRows.filter((row) => row.month === month).reduce((sum, row) => sum + row.quantity, 0),
+  }));
   const overviewSalesMonths = Array.from(new Set(overviewSalesRows.map((row) => row.month).filter(Boolean))).sort();
   const overviewLatestSalesMonth = overviewSalesMonths.at(-1) ?? "";
   const overviewRecentMonths = overviewSalesMonths.slice(-3);
@@ -553,6 +609,10 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
     ? overviewSalesRows.filter((row) => overviewRecentMonths.includes(row.month)).reduce((sum, row) => sum + (row.amount ?? 0), 0) / overviewRecentMonths.length
     : 0;
   const overviewOihAmount = overviewOihRows.reduce((sum, row) => sum + (row.amount ?? 0), 0);
+  const overviewOihNetValue = overviewOihRows.reduce((sum, row) => sum + (row.netValue ?? 0), 0);
+  const overviewOihConfirmedQty = overviewOihConfirmedRows.reduce((sum, row) => sum + row.quantity, 0);
+  const overviewOihPendingQty = overviewOihPendingRows.reduce((sum, row) => sum + row.quantity, 0);
+  const overviewOihRiskQty = overviewOihRiskRows.reduce((sum, row) => sum + row.quantity, 0);
   const overviewAmountRatio = overviewVelocityAmount ? overviewInventoryAmount / overviewVelocityAmount : 0;
   const overviewSalesTrend = overviewSalesMonths.slice(-12).map((month) => ({
     month,
@@ -895,8 +955,13 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
                 <>
                   <strong className="file-name">{data.fileName}</strong>
                   <p>{fmt(data.rowCount)} 行 · {data.sheetName} · {new Date(data.uploadedAt).toLocaleString("zh-CN")}</p>
-                  <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>{isSalesKind(source.kind) ? "流水" : "吊牌额"} <b>{fmt(((isSalesKind(source.kind) ? data.summary.revenue : data.summary.amount) ?? 0) / 10000, 1)}万</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
+                  <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>{isSalesKind(source.kind) ? "流水" : source.kind === "oih" ? "USD净值" : "吊牌额"} <b>{source.kind === "oih" ? `$${fmt((data.summary.netValue ?? 0) / 10000, 1)}万` : `${fmt(((isSalesKind(source.kind) ? data.summary.revenue : data.summary.amount) ?? 0) / 10000, 1)}万`}</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
                   <small className="detected-field">月份字段：{data.summary.detectedDateField || "未识别"}</small>
+                  {source.kind === "oih" && <div className="oih-status-strip">
+                    <span>确定到货 <b>{fmt(data.summary.statusCounts?.["确定到货"] ?? 0)}</b></span>
+                    <span>待确认 <b>{fmt(data.summary.statusCounts?.["待确认"] ?? 0)}</b></span>
+                    <span>风险 <b>{fmt(data.summary.statusCounts?.["风险订单"] ?? 0)}</b></span>
+                  </div>}
                   {source.kind === "inventory" && <div className="snapshot-list">
                     <strong>已保存月末快照</strong>
                     <div>{inventorySnapshotMonths.map((month) => <span key={month}>{month}<button onClick={() => removeInventoryMonth(month)} aria-label={`删除 ${month} 库存`}>×</button></span>)}</div>
@@ -926,6 +991,23 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         <strong>{detailReady ? (overviewAmountRatio > 6 ? "建议控单" : "进入明细审核") : "需重新上传"}</strong>
       </section>
 
+      {oih && <section className="panel oih-arrival-panel">
+        <div className="panel-title"><div><span className="step">OIH</span><h3>未来到货计划</h3></div><span className="unit">数量 · USD净值不与RMB吊牌混算</span></div>
+        <div className="oih-kpis">
+          <span>确定到货<strong>{fmt(overviewOihConfirmedQty)} 件</strong></span>
+          <span>待确认<strong>{fmt(overviewOihPendingQty)} 件</strong></span>
+          <span>风险订单<strong>{fmt(overviewOihRiskQty)} 件</strong></span>
+          <span>订单净值<strong>${fmt(overviewOihNetValue / 10000, 1)} 万</strong></span>
+        </div>
+        <div className="oih-month-list">
+          {oihMonthlyArrivals.map((row) => {
+            const max = Math.max(...oihMonthlyArrivals.map((item) => item.confirmed + item.pending), 1);
+            return <div key={row.month}><strong>{row.month}</strong><i><b style={{ width: `${row.confirmed / max * 100}%` }} /><em style={{ width: `${row.pending / max * 100}%` }} /></i><span>{fmt(row.confirmed)} 确定{row.pending ? ` + ${fmt(row.pending)} 待确认` : ""}</span></div>;
+          })}
+        </div>
+        {overviewOihRiskQty > 0 && <div className="rolling-alert"><b>风险口径</b><span>{fmt(overviewOihRiskQty)} 件缺少稳定到仓月份或属于 RISK-UC，暂不进入确定到货滚动。</span></div>}
+      </section>}
+
       <div className="data-analysis-grid">
         <section className="panel">
           <div className="panel-title"><div><span className="step">01</span><h3>近月销售趋势</h3></div><span className="unit">RMB吊牌 · 万元</span></div>
@@ -951,7 +1033,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
               </div>
             ))}
           </div>
-          {!sales || !inventory ? <div className="rolling-alert"><b>口径提示</b><span>当前为占位计算；补齐销售和库存后才形成真实滚动结果。OIH 默认放在第二个月到货。</span></div> : null}
+          <div className="rolling-alert"><b>金额口径</b><span>当前滚动采用RMB吊牌金额；Wilson OIH为USD Net Value，不能直接相加。数量滚动将按上方 Est In DC 月份使用确定到货量。</span></div>
         </section>
       </div>
 
