@@ -59,7 +59,7 @@ const STORE = "datasets";
 const DATA_SCHEMA_VERSION = 9;
 const SALES_SCHEMA_VERSION = 10;
 const OIH_SCHEMA_VERSION = 14;
-const ORDER_SCHEMA_VERSION = 2;
+const ORDER_SCHEMA_VERSION = 3;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
@@ -71,9 +71,9 @@ const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: st
 ];
 
 const aliases = {
-  sku: ["Material[VBAP]", "sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
+  sku: ["Material[VBAP]", "MATERIAL #", "MATERIAL#", "ARTICLE #", "sku", "货号", "商品编码", "物料编码", "款号", "货品编码"],
   country: ["Ship-to Cust", "BI合并公司", "国家", "市场", "区域", "country", "market"],
-  name: ["Description[VBAP]", "商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
+  name: ["Description[VBAP]", "DESCRIPTION", "MODEL", "商品名称", "商品名", "品名", "货品名称", "产品名称", "sku名称"],
   brand: ["渠道品牌描述", "品牌", "品牌名称", "brand"],
   category: ["SBU", "大类", "一级品类", "商品大类", "categoryl1", "category1"],
   middleCategory: ["PH3", "中类", "二级品类", "商品中类", "categoryl2", "category2"],
@@ -92,8 +92,8 @@ const aliases = {
   salesRevenue: ["本期零售金额-人民币", "本期零售金额人民币", "零售金额-人民币", "实际销售金额", "实收金额", "流水金额", "零售金额"],
   wholesaleRevenue: ["本期批发金额-人民币", "批发金额-人民币", "批发销售金额", "出库金额-人民币", "销售金额-人民币", "实际销售金额", "流水金额", "销售金额"],
   inventoryValue: ["本期_期末库存人民币吊牌金额", "本期期末库存人民币吊牌金额", "库存人民币吊牌金额", "期末库存人民币吊牌金额", "库存吊牌金额", "期末库存吊牌金额", "stockvalue"],
-  oihValue: ["oih吊牌金额", "订单吊牌金额", "在途吊牌金额", "吊牌金额", "订单金额"],
-  oihNetValue: ["Net value[", "Net value", "订单净值"],
+  oihValue: ["VALUE", "TTL VALUE", "oih吊牌金额", "订单吊牌金额", "在途吊牌金额", "吊牌金额", "订单金额"],
+  oihNetValue: ["VALUE", "TTL VALUE", "Net value[", "Net value", "AVID DAP PRICE", "AVID PRICE", "采购金额USD", "订单净值"],
   oihBillingMonth: ["Est.Billing Mth", "预计开票月份"],
   oihCrd: ["PO CRD", "CRD"],
   oihPo: ["PO No.", "PO Number", "PO号", "采购订单号", "PO"],
@@ -237,7 +237,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
       const headers = (matrix[index] ?? []).map((value) => String(value).trim());
       const quantityOptions = kind === "sales" ? aliases.sales : kind === "wholesale" ? aliases.wholesale : kind === "inventory" ? aliases.inventory : aliases.oih;
       const sheetPreference = isOihKind(kind) ? (/^OIH\b/i.test(sheetName) ? 6 : /OIH/i.test(sheetName) ? 3 : 0) - (/BILLED|HLF|CRD/i.test(sheetName) ? 5 : 0) : 0;
-      const score = [aliases.sku, aliases.country, aliases.date, quantityOptions].filter((options) => findHeader(headers, options)).length + sheetPreference;
+      const score = [aliases.sku, aliases.country, aliases.date, aliases.name, quantityOptions, aliases.oihNetValue].filter((options) => findHeader(headers, options)).length + sheetPreference;
       if (!best || score > best.score) {
         const rows = matrix.slice(index + 1).map((values) =>
           Object.fromEntries(headers.map((header, column) => [header || `字段${column + 1}`, values[column]])),
@@ -338,7 +338,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
         : rawChannel;
     const currency = currencyHeader ? String(row[currencyHeader] ?? "").trim() : "";
     const analysisSku = skuValue || (isSalesKind(kind) ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
-    if (analysisSku) {
+    if (analysisSku && (kind !== "order" || qty !== 0 || rowNetValue !== 0)) {
       const key = [month, paymentMonth, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel, oihStatus].join("¦");
       const current = detailMap.get(key);
       if (current) { current.quantity += qty; current.amount += rowAmount; current.revenue += rowRevenue; current.netValue = (current.netValue ?? 0) + rowNetValue; }
@@ -349,7 +349,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const missing = [
     !quantityHeader && "数量",
     !skuHeader && !isSalesKind(kind) && "SKU",
-    !dateHeader && "日期/月度",
+    !dateHeader && kind !== "order" && "日期/月度",
   ].filter(Boolean);
 
   return {
@@ -615,7 +615,9 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
         if (expiredRows.length) await Promise.all(expiredRows.map((row) => deleteOne(row.kind)));
         setDatasets(Object.fromEntries(validRows.map((row) => [row.kind, row])));
         setNotice(expiredRows.length
-          ? expiredKinds.has("oihWilson") || expiredKinds.has("oihSalomon")
+          ? expiredKinds.has("order")
+            ? "VBR8订单识别规则已更新：请重新上传本次WILSON订单，系统将读取MATERIAL #、QTY和VALUE"
+          : expiredKinds.has("oihWilson") || expiredKinds.has("oihSalomon")
             ? "OIH识别口径已更新：请分别上传最新的 Wilson 与 SALOMON OIH；现有销售与库存已保留"
             : "旧版销售渠道口径已自动清除：请重新上传 R01 和批发销售；库存与 OIH 已保留"
           : validRows.length ? `已恢复 ${validRows.length} 类数据，无需再次上传` : "尚未上传真实数据，可从三个数据源开始");
