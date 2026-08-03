@@ -18,7 +18,7 @@ type DetailRecord = {
   series: string;
   channel: string;
   sourceType?: "零售" | "批发";
-  oihStatus?: "确定到货" | "待确认" | "风险订单";
+  oihStatus?: "已确认有排期" | "已确认待CRD" | "Buy未确认";
   currency?: string;
   netValue?: number;
   quantity: number;
@@ -58,7 +58,7 @@ const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
 const DATA_SCHEMA_VERSION = 9;
 const SALES_SCHEMA_VERSION = 10;
-const OIH_SCHEMA_VERSION = 13;
+const OIH_SCHEMA_VERSION = 14;
 const ORDER_SCHEMA_VERSION = 2;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
@@ -96,6 +96,7 @@ const aliases = {
   oihNetValue: ["Net value[", "Net value", "订单净值"],
   oihBillingMonth: ["Est.Billing Mth", "预计开票月份"],
   oihCrd: ["PO CRD", "CRD"],
+  oihPo: ["PO No.", "PO Number", "PO号", "采购订单号", "PO"],
   currency: ["Curr.", "Currency", "币种"],
 };
 
@@ -235,7 +236,8 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     for (let index = 0; index < Math.min(25, matrix.length); index += 1) {
       const headers = (matrix[index] ?? []).map((value) => String(value).trim());
       const quantityOptions = kind === "sales" ? aliases.sales : kind === "wholesale" ? aliases.wholesale : kind === "inventory" ? aliases.inventory : aliases.oih;
-      const score = [aliases.sku, aliases.country, aliases.date, quantityOptions].filter((options) => findHeader(headers, options)).length;
+      const sheetPreference = isOihKind(kind) ? (/^OIH\b/i.test(sheetName) ? 6 : /OIH/i.test(sheetName) ? 3 : 0) - (/BILLED|HLF|CRD/i.test(sheetName) ? 5 : 0) : 0;
+      const score = [aliases.sku, aliases.country, aliases.date, quantityOptions].filter((options) => findHeader(headers, options)).length + sheetPreference;
       if (!best || score > best.score) {
         const rows = matrix.slice(index + 1).map((values) =>
           Object.fromEntries(headers.map((header, column) => [header || `字段${column + 1}`, values[column]])),
@@ -269,6 +271,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
   const oihNetValueHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihNetValue) : undefined;
   const oihBillingMonthHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihBillingMonth) : undefined;
   const oihCrdHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihCrd) : undefined;
+  const oihPoHeader = isArrivalFile ? findHeader(selected.headers, aliases.oihPo) : undefined;
   const currencyHeader = isArrivalFile ? findHeader(selected.headers, aliases.currency) : undefined;
   const monthly: Record<string, number> = {};
   const sku: Record<string, number> = {};
@@ -295,15 +298,10 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const rowNetValue = oihNetValueHeader ? numeric(row[oihNetValueHeader]) : 0;
     const billingMonth = oihBillingMonthHeader ? String(row[oihBillingMonthHeader] ?? "").trim() : "";
     const crd = oihCrdHeader ? row[oihCrdHeader] : "";
-    const paymentMonth = isArrivalFile
-      ? (monthOf(billingMonth) || monthOf(crd) || (dateHeader ? monthOf(row[dateHeader]) : ""))
-      : "";
+    const po = oihPoHeader ? String(row[oihPoHeader] ?? "").trim() : "";
+    const paymentMonth = isArrivalFile ? monthOf(billingMonth) : "";
     const oihStatus: DetailRecord["oihStatus"] = isOihKind(kind)
-      ? (/RISK/i.test(billingMonth) || (!dateHeader || !row[dateHeader]) && !crd
-          ? "风险订单"
-          : /UC/i.test(billingMonth) || !dateHeader || !row[dateHeader]
-            ? "待确认"
-            : "确定到货")
+      ? (crd ? "已确认有排期" : po || billingMonth || (dateHeader && row[dateHeader]) ? "已确认待CRD" : "Buy未确认")
       : undefined;
     quantity += qty;
     amount += rowAmount;
@@ -366,7 +364,7 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     message: missing.length
       ? `已保存，但未识别：${missing.join("、")}`
       : isOihKind(kind)
-        ? `已读取主表 ${selected.sheetName}；按预计到仓月份滚动，UC与RISK单独标记`
+        ? `已读取OIH主表 ${selected.sheetName}；按PO/CRD状态区分，并仅以Est.Billing Mth作为付款月份`
         : kind === "order"
           ? `已保存本次拟下订单；仅用于审核模拟，不计入现有OIH`
         : !skuHeader && isSalesKind(kind)
@@ -533,6 +531,50 @@ function shiftMonth(month: string, offset: number) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+export type ImportedOrderReviewItem = {
+  sku: string; name: string; country: string; current: number; oih: number;
+  sales13m: number; sales3m: number; orderQty: number; unitCost: number;
+  orderType: "客户锁单" | "常规补货" | "新品首单" | "电商补货" | "国家仓备货";
+  paymentMonth: string; customerEvidence: boolean;
+  status: "通过" | "有条件通过" | "需调整"; reasons: string[];
+};
+
+export async function loadOrderReviewItems(): Promise<{ items: ImportedOrderReviewItem[]; fileName: string; uploadedAt: string }> {
+  const datasets = await getAll();
+  const order = datasets.find((row) => row.kind === "order");
+  if (!order?.details?.length) return { items: [], fileName: "", uploadedAt: "" };
+  const inventory = datasets.find((row) => row.kind === "inventory")?.details ?? [];
+  const oih = datasets.filter((row) => isOihKind(row.kind)).flatMap((row) => row.details ?? []);
+  const sales = datasets.filter((row) => isSalesKind(row.kind)).flatMap((row) => row.details ?? []);
+  const months = [...new Set(sales.map((row) => row.month).filter(Boolean))].sort();
+  const last13 = new Set(months.slice(-13));
+  const last3 = new Set(months.slice(-3));
+  const grouped = new Map<string, DetailRecord>();
+  order.details.forEach((row) => {
+    const key = [row.sku, row.country, row.paymentMonth].join("¦");
+    const existing = grouped.get(key);
+    if (existing) { existing.quantity += row.quantity; existing.netValue = (existing.netValue ?? 0) + (row.netValue ?? 0); }
+    else grouped.set(key, { ...row });
+  });
+  const matches = (candidate: DetailRecord, row: DetailRecord) => candidate.sku === row.sku && (!row.country || !candidate.country || candidate.country === row.country);
+  const sumQty = (rows: DetailRecord[], row: DetailRecord, selectedMonths?: Set<string>) => rows.filter((candidate) => matches(candidate, row) && (!selectedMonths || selectedMonths.has(candidate.month))).reduce((sum, candidate) => sum + candidate.quantity, 0);
+  const items = [...grouped.values()].map((row): ImportedOrderReviewItem => {
+    const current = sumQty(inventory, row);
+    const openOih = sumQty(oih.filter((candidate) => candidate.oihStatus !== "Buy未确认"), row);
+    const sales13m = sumQty(sales, row, last13);
+    const sales3m = sumQty(sales, row, last3);
+    const monthlySales = sales3m / Math.max(1, Math.min(3, last3.size));
+    const monthsAfterOrder = monthlySales > 0 ? (current + openOih + row.quantity) / monthlySales : null;
+    const reasons = [`本次订单已从 ${order.fileName} 读取`, `现货 ${current}，已确认OIH ${openOih}，近3月销量 ${sales3m}`];
+    let status: ImportedOrderReviewItem["status"] = "有条件通过";
+    if (!sales3m && current + openOih > 0) { status = "需调整"; reasons.push("近3月无动销且已有库存或在途，建议暂缓并补充需求依据"); }
+    else if (monthsAfterOrder !== null && monthsAfterOrder > 6) { status = "需调整"; reasons.push(`下单后预计库存约 ${monthsAfterOrder.toFixed(1)} 个月，超过6个月预警线`); }
+    else reasons.push("库存覆盖未触发硬性上限，仍需财务确认付款条款");
+    return { sku: row.sku, name: row.name || row.sku, country: row.country || "未识别", current, oih: openOih, sales13m, sales3m, orderQty: row.quantity, unitCost: row.quantity ? (row.netValue ?? 0) / row.quantity : 0, orderType: sales13m ? "常规补货" : "新品首单", paymentMonth: row.paymentMonth || "待排期", customerEvidence: false, status, reasons };
+  });
+  return { items, fileName: order.fileName, uploadedAt: order.uploadedAt };
+}
+
 function monthRange(start: string, end: string) {
   if (!start || !end || start > end) return [];
   const months: string[] = [];
@@ -666,9 +708,9 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const overviewInventoryRows = (inventory?.details ?? []).filter((row) => overviewMatches(row) && (!latestInventoryMonth || !row.month || row.month === latestInventoryMonth));
   const overviewSalesRows = (sales?.details ?? []).filter(overviewMatches);
   const overviewOihRows = (oih?.details ?? []).filter(overviewMatches);
-  const overviewOihConfirmedRows = overviewOihRows.filter((row) => row.oihStatus === "确定到货");
-  const overviewOihPendingRows = overviewOihRows.filter((row) => row.oihStatus === "待确认");
-  const overviewOihRiskRows = overviewOihRows.filter((row) => row.oihStatus === "风险订单");
+  const overviewOihConfirmedRows = overviewOihRows.filter((row) => row.oihStatus === "已确认有排期");
+  const overviewOihPendingRows = overviewOihRows.filter((row) => row.oihStatus === "已确认待CRD");
+  const overviewOihRiskRows = overviewOihRows.filter((row) => row.oihStatus === "Buy未确认");
   const oihArrivalMonths = Array.from(new Set(overviewOihRows.map((row) => row.month).filter(Boolean))).sort();
   const oihMonthlyArrivals = oihArrivalMonths.map((month) => ({
     month,
@@ -904,7 +946,7 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
           <div className="local-badge"><i /> 同一设备自动记住</div>
         </div>
 
-        {!cashSourceRows.length && <div className="detail-upgrade-note"><strong>需要重新上传两品牌最新OIH</strong><span>新版将读取 Est.Billing Mth；若缺失则依次使用 PO CRD 和预计到货月份作为临时付款月份。原始币种及付款条款仍需财务确认。</span></div>}
+        {!cashSourceRows.length && <div className="detail-upgrade-note"><strong>需要重新上传两品牌最新OIH</strong><span>新版仅读取 Est.Billing Mth 作为付款月份；没有预计开票月的货款将保留为“待排期”，不会用 CRD 或到货月替代。</span></div>}
 
         <div className="summary-grid cash-summary-grid">
           <article><span>已承诺货款</span><strong>{fmt(committedCashTotal / 10000, 1)} <em>万美元</em></strong><small>WILSON + SALOMON 最新OIH</small></article>
@@ -1102,9 +1144,9 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
                   <div className="upload-stats"><span>数量 <b>{fmt(data.summary.quantity)}</b></span><span>{isSalesKind(source.kind) ? "流水" : isOihKind(source.kind) || source.kind === "order" ? "USD净值" : "吊牌额"} <b>{isOihKind(source.kind) || source.kind === "order" ? `$${fmt((data.summary.netValue ?? 0) / 10000, 1)}万` : `${fmt(((isSalesKind(source.kind) ? data.summary.revenue : data.summary.amount) ?? 0) / 10000, 1)}万`}</b></span><span>月份 <b>{fmt(data.summary.monthCount)}</b></span></div>
                   <small className="detected-field">月份字段：{data.summary.detectedDateField || "未识别"}</small>
                   {isOihKind(source.kind) && <div className="oih-status-strip">
-                    <span>确定到货 <b>{fmt(data.summary.statusCounts?.["确定到货"] ?? 0)}</b></span>
-                    <span>待确认 <b>{fmt(data.summary.statusCounts?.["待确认"] ?? 0)}</b></span>
-                    <span>风险 <b>{fmt(data.summary.statusCounts?.["风险订单"] ?? 0)}</b></span>
+                    <span>有PO及CRD <b>{fmt(data.summary.statusCounts?.["已确认有排期"] ?? 0)}</b></span>
+                    <span>已确认待CRD <b>{fmt(data.summary.statusCounts?.["已确认待CRD"] ?? 0)}</b></span>
+                    <span>Buy未确认 <b>{fmt(data.summary.statusCounts?.["Buy未确认"] ?? 0)}</b></span>
                   </div>}
                   {source.kind === "inventory" && <div className="snapshot-list">
                     <strong>已保存月末快照</strong>
@@ -1164,18 +1206,18 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       {oih && <section className="panel oih-arrival-panel">
         <div className="panel-title"><div><span className="step">OIH</span><h3>未来到货计划</h3></div><span className="unit">数量 · USD净值不与RMB吊牌混算</span></div>
         <div className="oih-kpis">
-          <span>确定到货<strong>{fmt(overviewOihConfirmedQty)} 件</strong></span>
-          <span>待确认<strong>{fmt(overviewOihPendingQty)} 件</strong></span>
-          <span>风险订单<strong>{fmt(overviewOihRiskQty)} 件</strong></span>
+          <span>有PO及CRD<strong>{fmt(overviewOihConfirmedQty)} 件</strong></span>
+          <span>已确认待CRD<strong>{fmt(overviewOihPendingQty)} 件</strong></span>
+          <span>Buy未确认<strong>{fmt(overviewOihRiskQty)} 件</strong></span>
           <span>订单净值<strong>${fmt(overviewOihNetValue / 10000, 1)} 万</strong></span>
         </div>
         <div className="oih-month-list">
           {oihMonthlyArrivals.map((row) => {
             const max = Math.max(...oihMonthlyArrivals.map((item) => item.confirmed + item.pending), 1);
-            return <div key={row.month}><strong>{row.month}</strong><i><b style={{ width: `${row.confirmed / max * 100}%` }} /><em style={{ width: `${row.pending / max * 100}%` }} /></i><span>{fmt(row.confirmed)} 确定{row.pending ? ` + ${fmt(row.pending)} 待确认` : ""}</span></div>;
+            return <div key={row.month}><strong>{row.month}</strong><i><b style={{ width: `${row.confirmed / max * 100}%` }} /><em style={{ width: `${row.pending / max * 100}%` }} /></i><span>{fmt(row.confirmed)} 有排期{row.pending ? ` + ${fmt(row.pending)} 待CRD` : ""}</span></div>;
           })}
         </div>
-        {overviewOihRiskQty > 0 && <div className="rolling-alert"><b>风险口径</b><span>{fmt(overviewOihRiskQty)} 件缺少稳定到仓月份或属于 RISK-UC，暂不进入确定到货滚动。</span></div>}
+        {overviewOihRiskQty > 0 && <div className="rolling-alert"><b>确认口径</b><span>{fmt(overviewOihRiskQty)} 件尚无PO及CRD，属于 Buy 未确认，不进入已承诺到货与货款。</span></div>}
       </section>}
 
       {proposedOrder && <section className="panel proposed-order-panel">

@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import DataHub from "./DataHub";
+import { useEffect, useMemo, useState } from "react";
+import DataHub, { loadOrderReviewItems } from "./DataHub";
 
 type OrderType = "客户锁单" | "常规补货" | "新品首单" | "电商补货" | "国家仓备货";
 type Status = "通过" | "有条件通过" | "需调整";
@@ -114,6 +114,7 @@ export default function Home() {
   const [items, setItems] = useState(seedItems);
   const [selectedSku, setSelectedSku] = useState(seedItems[2].sku);
   const [decision, setDecision] = useState("待财务决策");
+  const [reviewSource, setReviewSource] = useState("演示数据（尚未读取上传订单）");
   const [activeTab, setActiveTab] = useState<"data" | "sales" | "inventory" | "overview" | "cash" | "review" | "rules">("data");
   const [draft, setDraft] = useState({
     sku: "DEMO-003",
@@ -122,6 +123,18 @@ export default function Home() {
     orderType: "新品首单" as OrderType,
     paymentMonth: "2026-11",
   });
+
+  useEffect(() => {
+    if (activeTab !== "review") return;
+    loadOrderReviewItems().then((result) => {
+      if (!result.items.length) return;
+      setItems(result.items);
+      setReviewSource(result.fileName);
+      const first = result.items[0];
+      setSelectedSku(first.sku);
+      setDraft({ sku: first.sku, country: first.country, orderQty: first.orderQty, orderType: first.orderType, paymentMonth: first.paymentMonth === "待排期" ? "" : first.paymentMonth });
+    }).catch(() => setReviewSource("订单读取失败，请返回数据中心重新上传"));
+  }, [activeTab]);
 
   const selected = items.find((item) => item.sku === selectedSku) ?? items[0];
   const totalValue = items.reduce((sum, item) => sum + item.orderQty * item.unitCost, 0);
@@ -218,10 +231,10 @@ export default function Home() {
             </div>
 
             <div className="summary-grid">
-              <article><span>本次下单金额</span><strong>{money(totalValue)}</strong><small>4个样本SKU · VBR8</small></article>
+              <article><span>本次下单金额</span><strong>{money(totalValue)}</strong><small>{items.length}个SKU · {reviewSource}</small></article>
               <article><span>建议调整</span><strong className="red">{risky} <em>SKU</em></strong><small>触发硬性风险规则</small></article>
               <article><span>有条件通过</span><strong className="amber">{conditional} <em>SKU</em></strong><small>需补充客户或付款证据</small></article>
-              <article><span>预计付款峰值</span><strong>{money(Math.max(...payments.map(([, value]) => value)))}</strong><small>{payments.sort((a, b) => b[1] - a[1])[0]?.[0]} 预计付款</small></article>
+              <article><span>预计付款峰值</span><strong>{money(payments.length ? Math.max(...payments.map(([, value]) => value)) : 0)}</strong><small>{[...payments].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "待排期"} 预计付款</small></article>
             </div>
 
             <section className="executive-review" aria-label="本次订单审核总览">
@@ -270,7 +283,7 @@ export default function Home() {
                   </label>
                   <label>国家
                     <select value={draft.country} onChange={(e) => setDraft({ ...draft, country: e.target.value })}>
-                      {["示例市场A", "示例市场B", "示例市场C", "示例市场D"].map((country) => <option key={country}>{country}</option>)}
+                      {[...new Set(items.map((item) => item.country))].map((country) => <option key={country}>{country}</option>)}
                     </select>
                   </label>
                   <label>订单类型
