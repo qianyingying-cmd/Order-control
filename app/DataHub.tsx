@@ -7,6 +7,7 @@ type DataKind = "sales" | "wholesale" | "inventory" | "oihWilson" | "oihSalomon"
 type Row = Record<string, unknown>;
 type DetailRecord = {
   month: string;
+  paymentMonth?: string;
   sku: string;
   name: string;
   brand: string;
@@ -57,8 +58,8 @@ const DB_NAME = "wilson-rolling-inventory";
 const STORE = "datasets";
 const DATA_SCHEMA_VERSION = 9;
 const SALES_SCHEMA_VERSION = 10;
-const OIH_SCHEMA_VERSION = 12;
-const ORDER_SCHEMA_VERSION = 1;
+const OIH_SCHEMA_VERSION = 13;
+const ORDER_SCHEMA_VERSION = 2;
 const CANONICAL_BRANDS = ["ANTA", "FILA", "DESCENTE", "SALOMON", "WILSON", "ARC'TERYX"] as const;
 const kinds: Array<{ kind: DataKind; title: string; subtitle: string; accent: string }> = [
   { kind: "sales", title: "零售销售", subtitle: "观远 R01 / 门店零售", accent: "blue" },
@@ -294,6 +295,9 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const rowNetValue = oihNetValueHeader ? numeric(row[oihNetValueHeader]) : 0;
     const billingMonth = oihBillingMonthHeader ? String(row[oihBillingMonthHeader] ?? "").trim() : "";
     const crd = oihCrdHeader ? row[oihCrdHeader] : "";
+    const paymentMonth = isArrivalFile
+      ? (monthOf(billingMonth) || monthOf(crd) || (dateHeader ? monthOf(row[dateHeader]) : ""))
+      : "";
     const oihStatus: DetailRecord["oihStatus"] = isOihKind(kind)
       ? (/RISK/i.test(billingMonth) || (!dateHeader || !row[dateHeader]) && !crd
           ? "风险订单"
@@ -337,10 +341,10 @@ function parseWorkbook(buffer: ArrayBuffer, kind: DataKind, fileName: string): D
     const currency = currencyHeader ? String(row[currencyHeader] ?? "").trim() : "";
     const analysisSku = skuValue || (isSalesKind(kind) ? `无SKU维度:${brand || "未识别品牌"}:${category || "未识别大类"}:${middleCategory || "未识别中类"}:${channel || "未识别渠道"}` : "");
     if (analysisSku) {
-      const key = [month, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel, oihStatus].join("¦");
+      const key = [month, paymentMonth, country, analysisSku, name, brand, category, middleCategory, smallCategory, series, channel, oihStatus].join("¦");
       const current = detailMap.get(key);
       if (current) { current.quantity += qty; current.amount += rowAmount; current.revenue += rowRevenue; current.netValue = (current.netValue ?? 0) + rowNetValue; }
-      else detailMap.set(key, { month, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, sourceType: kind === "wholesale" ? "批发" : kind === "sales" ? "零售" : undefined, oihStatus, currency, netValue: rowNetValue, quantity: qty, amount: rowAmount, revenue: rowRevenue });
+      else detailMap.set(key, { month, paymentMonth, sku: analysisSku, name, brand, country, category, middleCategory, smallCategory, series, channel, sourceType: kind === "wholesale" ? "批发" : kind === "sales" ? "零售" : undefined, oihStatus, currency, netValue: rowNetValue, quantity: qty, amount: rowAmount, revenue: rowRevenue });
     }
   });
   const months = Object.keys(monthly).sort();
@@ -529,7 +533,18 @@ function shiftMonth(month: string, offset: number) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export default function DataHub({ view = "data" }: { view?: "data" | "analytics" | "sales" | "inventory" }) {
+function monthRange(start: string, end: string) {
+  if (!start || !end || start > end) return [];
+  const months: string[] = [];
+  let cursor = start;
+  while (cursor <= end && months.length < 60) {
+    months.push(cursor);
+    cursor = shiftMonth(cursor, 1);
+  }
+  return months;
+}
+
+export default function DataHub({ view = "data" }: { view?: "data" | "analytics" | "sales" | "inventory" | "cash" }) {
   const [datasets, setDatasets] = useState<Partial<Record<DataKind, Dataset>>>({});
   const [busy, setBusy] = useState<DataKind | null>(null);
   const [notice, setNotice] = useState("正在读取本机已保存的数据…");
@@ -673,6 +688,26 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
   const overviewOihConfirmedQty = overviewOihConfirmedRows.reduce((sum, row) => sum + row.quantity, 0);
   const overviewOihPendingQty = overviewOihPendingRows.reduce((sum, row) => sum + row.quantity, 0);
   const overviewOihRiskQty = overviewOihRiskRows.reduce((sum, row) => sum + row.quantity, 0);
+  const cashSourceRows = (oih?.details ?? []).filter((row) => row.paymentMonth && (row.brand === "WILSON" || row.brand === "SALOMON"));
+  const proposedCashRows = (proposedOrder?.details ?? []).filter((row) => row.paymentMonth);
+  const currentYear = new Date().getFullYear();
+  const cashStart = `${currentYear}-01`;
+  const cashLastSourceMonth = [...cashSourceRows, ...proposedCashRows].map((row) => row.paymentMonth ?? "").filter(Boolean).sort().at(-1) ?? "";
+  const cashMinimumEnd = shiftMonth(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`, 6);
+  const cashEnd = cashLastSourceMonth > cashMinimumEnd ? cashLastSourceMonth : cashMinimumEnd;
+  const cashMonths = monthRange(cashStart, cashEnd);
+  const cashForecast = cashMonths.map((month) => {
+    const rows = cashSourceRows.filter((row) => row.paymentMonth === month);
+    const wilson = rows.filter((row) => row.brand === "WILSON").reduce((sum, row) => sum + (row.netValue ?? 0), 0);
+    const salomon = rows.filter((row) => row.brand === "SALOMON").reduce((sum, row) => sum + (row.netValue ?? 0), 0);
+    const proposed = proposedCashRows.filter((row) => row.paymentMonth === month).reduce((sum, row) => sum + (row.netValue ?? 0), 0);
+    return { month, wilson, salomon, committed: wilson + salomon, proposed, totalScenario: wilson + salomon + proposed };
+  });
+  const committedCashTotal = cashForecast.reduce((sum, row) => sum + row.committed, 0);
+  const wilsonCashTotal = cashForecast.reduce((sum, row) => sum + row.wilson, 0);
+  const salomonCashTotal = cashForecast.reduce((sum, row) => sum + row.salomon, 0);
+  const proposedCashTotal = cashForecast.reduce((sum, row) => sum + row.proposed, 0);
+  const cashPeak = cashForecast.reduce((peak, row) => row.totalScenario > peak.totalScenario ? row : peak, { month: "—", wilson: 0, salomon: 0, committed: 0, proposed: 0, totalScenario: 0 });
   const overviewAmountRatio = overviewVelocityAmount ? overviewInventoryAmount / overviewVelocityAmount : 0;
   const overviewSalesTrend = overviewSalesMonths.slice(-12).map((month) => ({
     month,
@@ -858,6 +893,51 @@ export default function DataHub({ view = "data" }: { view?: "data" | "analytics"
       : rolling.some((row) => row.closing < 0)
         ? `${overviewBrand}按当前销售额滚动预测将出现库存不足；建议结合到货月份补单。`
         : `${overviewBrand}金额库销比为 ${overviewAmountRatio.toFixed(1)} 个月，滚动期内库存可控；可继续按品类和SKU下钻审核。`;
+
+  if (view === "cash") {
+    const cashMax = Math.max(...cashForecast.map((row) => row.totalScenario), 1);
+    const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+    return (
+      <section className="data-hub cash-forecast-view">
+        <div className="page-heading">
+          <div><p className="eyebrow blue">CASH & PAYMENT FORECAST</p><h2>AMER品牌货款与现金流预测</h2><p>按预计开票/付款月份汇总 WILSON 与 SALOMON 已下单OIH货款，并将本次拟下订单作为未承诺增量情景单独展示。</p></div>
+          <div className="local-badge"><i /> 同一设备自动记住</div>
+        </div>
+
+        {!cashSourceRows.length && <div className="detail-upgrade-note"><strong>需要重新上传两品牌最新OIH</strong><span>新版将读取 Est.Billing Mth；若缺失则依次使用 PO CRD 和预计到货月份作为临时付款月份。原始币种及付款条款仍需财务确认。</span></div>}
+
+        <div className="summary-grid cash-summary-grid">
+          <article><span>已承诺货款</span><strong>{fmt(committedCashTotal / 10000, 1)} <em>万美元</em></strong><small>WILSON + SALOMON 最新OIH</small></article>
+          <article><span>WILSON OIH</span><strong>{fmt(wilsonCashTotal / 10000, 1)} <em>万美元</em></strong><small>{committedCashTotal ? `${(wilsonCashTotal / committedCashTotal * 100).toFixed(1)}%` : "等待OIH"} · 已下单</small></article>
+          <article><span>SALOMON OIH</span><strong>{fmt(salomonCashTotal / 10000, 1)} <em>万美元</em></strong><small>{committedCashTotal ? `${(salomonCashTotal / committedCashTotal * 100).toFixed(1)}%` : "等待OIH"} · 已下单</small></article>
+          <article><span>付款峰值</span><strong>{fmt(cashPeak.totalScenario / 10000, 1)} <em>万美元</em></strong><small>{cashPeak.month} · 含拟下订单情景</small></article>
+        </div>
+
+        <section className="panel cash-forecast-panel">
+          <div className="panel-title"><div><span className="step">01</span><h3>月度货款需求</h3></div><span className="legend"><span className="cash-key wilson" />WILSON <span className="cash-key salomon" />SALOMON <span className="cash-key proposed" />拟下订单</span></div>
+          <div className="cash-timeline">
+            {cashForecast.map((row) => <div className={`cash-timeline-row ${row.month === currentMonth ? "current" : ""}`} key={row.month}>
+              <strong>{row.month}</strong>
+              <div className="cash-stack" aria-label={`${row.month}货款需求`}>
+                <i className="wilson" style={{ width: `${row.wilson / cashMax * 100}%` }} />
+                <i className="salomon" style={{ width: `${row.salomon / cashMax * 100}%` }} />
+                <i className="proposed" style={{ width: `${row.proposed / cashMax * 100}%` }} />
+              </div>
+              <span><b>{fmt(row.committed / 10000, 1)}万美元</b>{row.proposed > 0 ? ` + 拟下单 ${fmt(row.proposed / 10000, 1)}万美元` : ""}</span>
+            </div>)}
+          </div>
+        </section>
+
+        <section className="panel cash-detail-panel">
+          <div className="panel-title"><div><span className="step">02</span><h3>月度付款明细</h3></div><span className="unit">单位：万美元</span></div>
+          <div className="table-wrap"><table><thead><tr><th>付款月份</th><th>WILSON</th><th>SALOMON</th><th>已承诺合计</th><th>拟下订单</th><th>批准后情景合计</th><th>状态</th></tr></thead>
+          <tbody>{cashForecast.map((row) => <tr key={row.month}><td><strong>{row.month}</strong></td><td>{fmt(row.wilson / 10000, 1)}</td><td>{fmt(row.salomon / 10000, 1)}</td><td><strong>{fmt(row.committed / 10000, 1)}</strong></td><td>{fmt(row.proposed / 10000, 1)}</td><td><strong>{fmt(row.totalScenario / 10000, 1)}</strong></td><td><span className={row.totalScenario === cashPeak.totalScenario && row.totalScenario > 0 ? "diagnostic-tag 高库存" : "diagnostic-tag 健康"}>{row.totalScenario === cashPeak.totalScenario && row.totalScenario > 0 ? "峰值月" : row.committed > 0 ? "已排款" : "无需求"}</span></td></tr>)}</tbody></table></div>
+        </section>
+
+        <section className="cash-method-note"><b>计算口径</b><span>货款统一按万美元展示。已承诺货款仅包含最新 WILSON 与 SALOMON OIH的 Net Value；本次拟下订单不计入已承诺，只作为批准后情景。付款月份优先使用 Est.Billing Mth，缺失时暂用 PO CRD 或预计到货月份；实际现金计划仍需由财务补充付款条款和订金比例。</span></section>
+      </section>
+    );
+  }
 
   if (view === "analytics" || view === "sales" || view === "inventory") {
     const viewTitle = view === "sales" ? "销售经营看板" : view === "inventory" ? "库存经营看板" : "进销存经营总览";

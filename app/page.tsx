@@ -114,7 +114,7 @@ export default function Home() {
   const [items, setItems] = useState(seedItems);
   const [selectedSku, setSelectedSku] = useState(seedItems[2].sku);
   const [decision, setDecision] = useState("待财务决策");
-  const [activeTab, setActiveTab] = useState<"data" | "sales" | "inventory" | "overview" | "review" | "rules">("data");
+  const [activeTab, setActiveTab] = useState<"data" | "sales" | "inventory" | "overview" | "cash" | "review" | "rules">("data");
   const [draft, setDraft] = useState({
     sku: "DEMO-003",
     country: "示例市场C",
@@ -191,6 +191,7 @@ export default function Home() {
         <button className={activeTab === "sales" ? "active" : ""} onClick={() => setActiveTab("sales")}>销售看板</button>
         <button className={activeTab === "inventory" ? "active" : ""} onClick={() => setActiveTab("inventory")}>库存看板</button>
         <button className={activeTab === "overview" ? "active" : ""} onClick={() => setActiveTab("overview")}>进销存总览</button>
+        <button className={activeTab === "cash" ? "active" : ""} onClick={() => setActiveTab("cash")}>现金流预测</button>
         <button className={activeTab === "review" ? "active" : ""} onClick={() => setActiveTab("review")}>下单审核</button>
         <button className={activeTab === "rules" ? "active" : ""} onClick={() => setActiveTab("rules")}>规则与口径</button>
         <span className="source-note">零售 · 批发 · 库存 · OIH · 订单</span>
@@ -201,6 +202,7 @@ export default function Home() {
         {activeTab === "sales" && <DataHub view="sales" />}
         {activeTab === "inventory" && <DataHub view="inventory" />}
         {activeTab === "overview" && <DataHub view="analytics" />}
+        {activeTab === "cash" && <DataHub view="cash" />}
         {activeTab === "review" && (
           <>
             <div className="page-heading">
